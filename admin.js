@@ -399,20 +399,32 @@ function displayEventsGrid() {
     });
 }
 
+// Replace the entire createEvent function with:
 async function createEvent(e) {
     e.preventDefault();
     
+    const startTimeInput = document.getElementById('event-start').value;
+    if (!startTimeInput) {
+        showNotification('Please select start time');
+        return;
+    }
+    
     const eventData = {
         title: document.getElementById('event-title').value,
-        description: document.getElementById('event-description').value,
-        startTime: firebase.firestore.Timestamp.fromDate(new Date(document.getElementById('event-start').value)),
-        vigPercentage: parseInt(document.getElementById('event-vig').value),
+        description: document.getElementById('event-description').value || '',
+        startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
+        vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
         options: document.getElementById('event-options').value.split('\n').filter(opt => opt.trim()),
         status: 'active',
         totalBets: 0,
         totalPot: 0,
         createdAt: firebase.firestore.Timestamp.now()
     };
+    
+    if (eventData.options.length < 2) {
+        showNotification('Please add at least 2 betting options');
+        return;
+    }
     
     try {
         await db.collection('events').add(eventData);
