@@ -9,7 +9,10 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-firebase.initializeApp(firebaseConfig);
+// Initialize Firebase
+if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+}
 const db = firebase.firestore();
 
 // Global Variables
@@ -425,6 +428,8 @@ async function createEvent(e) {
     const eventData = {
         title: document.getElementById('event-title').value,
         description: document.getElementById('event-description').value || '',
+        profilePic: document.getElementById('event-profile-pic').value,
+        backgroundImage: document.getElementById('event-background').value || '',
         startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
         options: document.getElementById('event-options').value.split('\n').filter(opt => opt.trim()),
