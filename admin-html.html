@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PredictKing Admin Panel</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Orbitron', monospace;
+            background: #0a0a0a;
+            color: #FFF3DA;
+            min-height: 100vh;
+        }
+
+        .admin-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding: 2rem;
+            background: rgba(158, 240, 26, 0.1);
+            border-radius: 12px;
+            border: 1px solid #9ef01a;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            color: #9ef01a;
+            margin-bottom: 0.5rem;
+        }
+
+        .admin-tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: 1px solid #333;
+            color: #FFF3DA;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: 'Orbitron', monospace;
+            font-weight: 700;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+
+        .tab-btn.active {
+            background: #9ef01a;
+            color: #0a0a0a;
+            border-color: #9ef01a;
+        }
+
+        .tab-content {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 2rem;
+            border: 1px solid #333;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .stat-card {
+            background: rgba(158, 240, 26, 0.1);
+            border: 1px solid #9ef01a;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 3rem;
+            font-weight: 900;
+            color: #9ef01a;
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            font-size: 1rem;
+            color: #ccc;
+        }
+
+        .form-group {
+            margin-bottom: 2rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+            color: #9ef01a;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid #333;
+            color: #FFF3DA;
+            padding: 1rem;
+            border-radius: 8px;
+            font-family: 'Orbitron', monospace;
+            font-size: 0.9rem;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #9ef01a;
+            box-shadow: 0 0 10px rgba(158, 240, 26, 0.3);
+        }
+
+        .btn {
+            background: #9ef01a;
+            border: none;
+            color: #0a0a0a;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: 'Orbitron', monospace;
+            font-weight: 700;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            margin-right: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(158, 240, 26, 0.4);
+        }
+
+        .btn-danger {
+            background: #ff0a54;
+        }
+
+        .btn-warning {
+            background: #ffa500;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 2px solid #9ef01a;
+            color: #9ef01a;
+        }
+
+        .users-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 2rem;
+        }
+
+        .users-table th,
+        .users-table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+
+        .users-table th {
+            background: rgba(158, 240, 26, 0.1);
+            color: #9ef01a;
+            font-weight: 700;
+        }
+
+        .users-table tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .user-actions {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .user-actions button {
+            padding: 0.5rem 1rem;
+            font-size: 0.8rem;
+            margin: 0;
+        }
+
+        .status-pending {
+            color: #ffa500;
+            font-weight: 700;
+        }
+
+        .status-approved {
+            color: #9ef01a;
+            font-weight: 700;
+        }
+
+        .rep-good {
+            color: #9ef01a;
+        }
+
+        .rep-bad {
+            color: #ff0a54;
+        }
+
+        .debt-amount {
+            color: #ff0a54;
+            font-weight: 700;
+        }
+
+        .events-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .event-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+
+        .event-status {
+            display: inline-block;
+            padding: 0.3rem 0.8rem;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .event-status.active {
+            background: rgba(158, 240, 26, 0.2);
+            color: #9ef01a;
+        }
+
+        .event-status.completed {
+            background: rgba(128, 128, 128, 0.2);
+            color: #888;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+
+        .modal-content {
+            background: #1a1a1a;
+            margin: 5% auto;
+            padding: 2rem;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            border: 1px solid #333;
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 2rem;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover {
+            color: #9ef01a;
+        }
+
+        .notification {
+            position: fixed;
+            top: 2rem;
+            right: 2rem;
+            background: rgba(20, 20, 20, 0.95);
+            border: 1px solid #9ef01a;
+            color: #FFF3DA;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            z-index: 10001;
+            display: none;
+        }
+
+        .logs-container {
+            max-height: 600px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+
+        .log-entry {
+            margin-bottom: 0.5rem;
+            padding: 0.5rem;
+            border-left: 3px solid #9ef01a;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .log-timestamp {
+            color: #9ef01a;
+            font-weight: 700;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            .admin-container {
+                padding: 1rem;
+            }
+
+            .admin-tabs {
+                flex-direction: column;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .users-table {
+                font-size: 0.8rem;
+            }
+
+            .user-actions {
+                flex-direction: column;
+            }
+
+            .events-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="admin-container">
+        <header class="header">
+            <h1>👑 PREDICTKING ADMIN</h1>
+            <p>Master Control Panel</p>
+        </header>
+
+        <nav class="admin-tabs">
+            <button class="tab-btn active" onclick="showTab('dashboard')">Dashboard</button>
+            <button class="tab-btn" onclick="showTab('users')">Users & KYC</button>
+            <button class="tab-btn" onclick="showTab('events')">Events</button>
+            <button class="tab-btn" onclick="showTab('settings')">Settings</button>
+            <button class="tab-btn" onclick="showTab('messages')">Messages</button>
+            <button class="tab-btn" onclick="showTab('analytics')">Analytics</button>
+        </nav>
+
+        <main class="tab-content" id="tab-content">
+            <!-- Tab content will be loaded here -->
+        </main>
+    </div>
+
+    <!-- Create Event Modal -->
+    <div id="create-event-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('create-event-modal')">&times;</span>
+            <h2>Create New Event</h2>
+            <form id="create-event-form">
+                <div class="form-group">
+                    <label for="event-title">Event Title</label>
+                    <input type="text" id="event-title" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="event-start">Start Time</label>
+                        <input type="datetime-local" id="event-start" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="event-vig">Vig Percentage (%)</label>
+                        <input type="number" id="event-vig" min="0" max="20" value="5">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="event-description">Description</label>
+                    <textarea id="event-description" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="event-options">Betting Options (one per line)</label>
+                    <textarea id="event-options" rows="3" placeholder="Team A&#10;Team B"></textarea>
+                </div>
+                <button type="submit" class="btn">CREATE EVENT</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Send Message Modal -->
+    <div id="send-message-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('send-message-modal')">&times;</span>
+            <h2>Send Message</h2>
+            <form id="send-message-form">
+                <div class="form-group">
+                    <label for="message-type">Message Type</label>
+                    <select id="message-type">
+                        <option value="individual">Individual User</option>
+                        <option value="bulk">All Users</option>
+                        <option value="kyc-pending">KYC Pending</option>
+                        <option value="debt">Users with Debt</option>
+                    </select>
+                </div>
+                <div class="form-group" id="user-select-group">
+                    <label for="target-user">Select User</label>
+                    <select id="target-user">
+                        <!-- Users will be populated here -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="message-subject">Subject</label>
+                    <input type="text" id="message-subject" required>
+                </div>
+                <div class="form-group">
+                    <label for="message-content">Message</label>
+                    <textarea id="message-content" rows="5" required></textarea>
+                </div>
+                <button type="submit" class="btn">SEND MESSAGE</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Notification -->
+    <div id="notification" class="notification">
+        <span id="notification-text"></span>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="admin.js"></script>
+</body>
+</html>
