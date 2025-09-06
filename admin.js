@@ -47,7 +47,13 @@ document.addEventListener('DOMContentLoaded', function() {
 function showTab(tabName) {
     const content = document.getElementById('tab-content');
     const tabBtns = document.querySelectorAll('.tab-btn');
-    
+    /* Add right after those lines: */
+    // Check if Firebase is initialized
+    if (!db) {
+        console.error('Firebase not initialized');
+        showNotification('Database connection error');
+        return;
+    }
     // Update active tab
     tabBtns.forEach(btn => btn.classList.remove('active'));
     event.target.classList.add('active');
