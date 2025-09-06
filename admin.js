@@ -49,14 +49,21 @@ function showTab(tabName) {
     const tabBtns = document.querySelectorAll('.tab-btn');
     /* Add right after those lines: */
     // Check if Firebase is initialized
-    if (!db) {
+    if (!firebase.apps.length) {
         console.error('Firebase not initialized');
         showNotification('Database connection error');
         return;
     }
     // Update active tab
+    // Update active tab
     tabBtns.forEach(btn => btn.classList.remove('active'));
-    event.target.classList.add('active');
+    if (event && event.target) {
+        event.target.classList.add('active');
+    } else {
+        // If called programmatically, find the tab by name
+        const targetTab = document.querySelector(`[onclick="showTab('${tabName}')"]`);
+        if (targetTab) targetTab.classList.add('active');
+    }
     
     // Load tab content
     switch(tabName) {
