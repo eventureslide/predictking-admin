@@ -1,11 +1,11 @@
 // Firebase Configuration - SAME AS MAIN APP
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_AUTH_DOMAIN", 
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_STORAGE_BUCKET",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIzaSyA61LVsUjl1CsR3XeMyEjjZ-DDU6rMHwhU",
+    authDomain: "predictking-database.firebaseapp.com",
+    projectId: "predictking-database",
+    storageBucket: "predictking-database.firebasestorage.app",
+    messagingSenderId: "786291226968",
+    appId: "1:786291226968:web:4608df217228f4ecdf0d2d"
 };
 
 // Initialize Firebase
