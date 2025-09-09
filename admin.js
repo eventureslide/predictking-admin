@@ -69,7 +69,6 @@ function showTab(tabName) {
     }
     
     // Load tab content
-    // Load tab content
     switch(tabName) {
         case 'dashboard':
             content.innerHTML = createDashboardTab();
@@ -82,10 +81,6 @@ function showTab(tabName) {
         case 'events':
             content.innerHTML = createEventsTab();
             loadEventsGrid();
-            break;
-        case 'inbox':
-            content.innerHTML = createInboxTab();
-            loadAdminInbox();
             break;
         case 'settings':
             content.innerHTML = createSettingsTab();
@@ -430,62 +425,36 @@ async function createEvent(e) {
         return;
     }
     
-    const title = document.getElementById('event-title').value.trim();
-    const profilePic = document.getElementById('event-profile-pic').value.trim();
-    const optionsText = document.getElementById('event-options').value.trim();
+    const eventData = {
+        title: document.getElementById('event-title').value,
+        description: document.getElementById('event-description').value || '',
+        profilePic: document.getElementById('event-profile-pic').value,
+        backgroundImage: document.getElementById('event-background').value || '',
+        startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
+        vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
+        options: document.getElementById('event-options').value.split('\n').filter(opt => opt.trim()),
+        status: 'active',
+        totalBets: 0,
+        totalPot: 0,
+        createdAt: firebase.firestore.Timestamp.now()
+    };
     
-    if (!title || !profilePic) {
-        showNotification('Please fill in all required fields');
-        return;
-    }
-    
-    const options = optionsText.split('\n').filter(opt => opt.trim());
-    if (options.length < 2) {
+    if (eventData.options.length < 2) {
         showNotification('Please add at least 2 betting options');
         return;
     }
     
-    const eventData = {
-        title: title,
-        description: document.getElementById('event-description').value.trim() || '',
-        profilePic: profilePic,
-        backgroundImage: document.getElementById('event-background').value.trim() || 'https://picsum.photos/seed/event/800/600',
-        startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
-        vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
-        options: options,
-        status: 'active',
-        totalBets: 0,
-        totalPot: 0,
-        createdAt: firebase.firestore.Timestamp.now(),
-        createdBy: 'admin'
-    };
-    
     try {
-        showBuffering();
-        const docRef = await db.collection('events').add(eventData);
-        
-        // Log event creation
-        await db.collection('activity_logs').add({
-            action: 'event_created',
-            data: { 
-                eventId: docRef.id, 
-                title: title,
-                adminAction: true 
-            },
-            timestamp: firebase.firestore.Timestamp.now()
-        });
-        
+        await db.collection('events').add(eventData);
         closeModal('create-event-modal');
         showNotification('Event created successfully');
         loadEventsGrid();
         
         // Reset form
         document.getElementById('create-event-form').reset();
-        hideBuffering();
     } catch (error) {
         console.error('Error creating event:', error);
-        showNotification('Error creating event: ' + error.message);
-        hideBuffering();
+        showNotification('Error creating event');
     }
 }
 
@@ -603,101 +572,51 @@ async function sendMessage(e) {
     e.preventDefault();
     
     const messageType = document.getElementById('message-type').value;
-    const subject = document.getElementById('message-subject').value.trim();
-    const content = document.getElementById('message-content').value.trim();
-    
-    if (!subject || !content) {
-        showNotification('Please fill in all fields');
-        return;
-    }
+    const subject = document.getElementById('message-subject').value;
+    const content = document.getElementById('message-content').value;
     
     try {
-        showBuffering();
-        
-        // Get target users based on type
         let targetUsers = [];
-        let usersSnapshot;
         
         switch(messageType) {
             case 'individual':
-                const selectedUserId = document.getElementById('target-user').value;
-                if (!selectedUserId) {
-                    showNotification('Please select a user');
-                    return;
-                }
-                targetUsers = [selectedUserId];
+                targetUsers = [document.getElementById('target-user').value];
                 break;
-                
             case 'bulk':
-                usersSnapshot = await db.collection('users').get();
-                targetUsers = usersSnapshot.docs.map(doc => doc.id);
+                targetUsers = users.map(u => u.id);
                 break;
-                
             case 'kyc-pending':
-                usersSnapshot = await db.collection('users').where('kycStatus', '==', 'pending').get();
-                targetUsers = usersSnapshot.docs.map(doc => doc.id);
+                targetUsers = users.filter(u => u.kycStatus === 'pending').map(u => u.id);
                 break;
-                
             case 'debt':
-                usersSnapshot = await db.collection('users').where('debt', '>', 0).get();
-                targetUsers = usersSnapshot.docs.map(doc => doc.id);
+                targetUsers = users.filter(u => u.debt > 0).map(u => u.id);
                 break;
-                
-            default:
-                showNotification('Invalid message type');
-                return;
         }
         
-        if (targetUsers.length === 0) {
-            showNotification('No users found for the selected criteria');
-            return;
-        }
-        
-        // Send notifications in batches to avoid Firestore limits
-        const batchSize = 500;
-        for (let i = 0; i < targetUsers.length; i += batchSize) {
-            const batch = db.batch();
-            const batchUsers = targetUsers.slice(i, i + batchSize);
-            
-            batchUsers.forEach(userId => {
-                const notifRef = db.collection('notifications').doc();
-                batch.set(notifRef, {
-                    userId: userId,
-                    title: subject,
-                    message: content,
-                    timestamp: firebase.firestore.Timestamp.now(),
-                    read: false,
-                    type: 'admin',
-                    messageType: messageType
-                });
+        // Send notifications to all target users
+        const batch = db.batch();
+        targetUsers.forEach(userId => {
+            const notifRef = db.collection('notifications').doc();
+            batch.set(notifRef, {
+                userId: userId,
+                title: subject,
+                message: content,
+                timestamp: firebase.firestore.Timestamp.now(),
+                read: false,
+                type: 'admin'
             });
-            
-            await batch.commit();
-        }
-        
-        // Log the message send
-        await db.collection('activity_logs').add({
-            action: 'admin_message_sent',
-            data: {
-                messageType: messageType,
-                subject: subject,
-                recipientCount: targetUsers.length,
-                adminAction: true
-            },
-            timestamp: firebase.firestore.Timestamp.now()
         });
         
+        await batch.commit();
+        
         closeModal('send-message-modal');
-        showNotification(`Message sent to ${targetUsers.length} users successfully`);
+        showNotification(`Message sent to ${targetUsers.length} users`);
         
         // Reset form
         document.getElementById('send-message-form').reset();
-        hideBuffering();
         
     } catch (error) {
         console.error('Error sending message:', error);
-        showNotification('Error sending message: ' + error.message);
-        hideBuffering();
     }
 }
 
@@ -760,62 +679,28 @@ async function loadAnalyticsData() {
         today.setHours(0, 0, 0, 0);
         const todayTimestamp = firebase.firestore.Timestamp.fromDate(today);
         
-        // Daily signups - use registrationDate field
-        const dailySignupsSnapshot = await db.collection('users')
+        // Daily signups
+        const dailySignups = await db.collection('users')
             .where('registrationDate', '>=', todayTimestamp)
             .get();
-        document.getElementById('daily-signups').textContent = dailySignupsSnapshot.size;
+        document.getElementById('daily-signups').textContent = dailySignups.size;
         
-        // Daily activity - get all activity logs for today
-        const dailyActivitySnapshot = await db.collection('activity_logs')
+        // Daily activity
+        const dailyActivity = await db.collection('activity_logs')
             .where('timestamp', '>=', todayTimestamp)
             .get();
-        
-        // Count different types of activities
-        let dailyBets = 0;
-        let dailyRevenue = 0;
-        
-        dailyActivitySnapshot.docs.forEach(doc => {
-            const data = doc.data();
-            if (data.action === 'bet_placed') {
-                dailyBets++;
-                if (data.data && data.data.amount) {
-                    dailyRevenue += data.data.amount * 0.05; // Assuming 5% vig
-                }
-            }
-        });
-        
-        document.getElementById('daily-bets').textContent = dailyBets;
-        document.getElementById('daily-revenue').textContent = formatCurrency(dailyRevenue, 'INR');
+            
+        const bets = dailyActivity.docs.filter(doc => doc.data().action === 'bet_placed');
+        document.getElementById('daily-bets').textContent = bets.length;
         
         // KYC Conversion rate
-        const allUsersSnapshot = await db.collection('users').get();
-        const totalUsers = allUsersSnapshot.size;
-        const approvedUsers = allUsersSnapshot.docs.filter(doc => 
-            doc.data().kycStatus === 'approved'
-        ).length;
-        
+        const totalUsers = users.length;
+        const approvedUsers = users.filter(u => u.kycStatus === 'approved').length;
         const conversionRate = totalUsers > 0 ? ((approvedUsers / totalUsers) * 100).toFixed(1) : 0;
         document.getElementById('conversion-rate').textContent = conversionRate + '%';
         
-        // Update activity display
-        const activityContainer = document.getElementById('activity-analytics');
-        if (activityContainer) {
-            let activityHTML = '<h4>Today\'s Activity Breakdown:</h4>';
-            activityHTML += `<p>Total Actions: ${dailyActivitySnapshot.size}</p>`;
-            activityHTML += `<p>Bets Placed: ${dailyBets}</p>`;
-            activityHTML += `<p>New Registrations: ${dailySignupsSnapshot.size}</p>`;
-            activityHTML += `<p>Revenue Generated: ${formatCurrency(dailyRevenue, 'INR')}</p>`;
-            activityContainer.innerHTML = activityHTML;
-        }
-        
     } catch (error) {
         console.error('Error loading analytics:', error);
-        // Set default values if there's an error
-        document.getElementById('daily-signups').textContent = '0';
-        document.getElementById('daily-bets').textContent = '0';
-        document.getElementById('daily-revenue').textContent = '₹0';
-        document.getElementById('conversion-rate').textContent = '0%';
     }
 }
 
@@ -1013,264 +898,4 @@ window.onclick = function(event) {
     if (event.target.classList.contains('modal')) {
         event.target.style.display = 'none';
     }
-}
-
-// Admin Inbox Functions
-function createInboxTab() {
-    return `
-        <div class="form-group">
-            <button class="btn btn-secondary" onclick="refreshInbox()">REFRESH INBOX</button>
-            <button class="btn btn-warning" onclick="markAllAsRead()">MARK ALL READ</button>
-        </div>
-        
-        <div class="inbox-container">
-            <h3>User Complaints & Messages</h3>
-            <div class="complaints-list" id="complaints-list">
-                <div style="text-align: center; padding: 2rem;">Loading complaints...</div>
-            </div>
-        </div>
-    `;
-}
-
-async function loadAdminInbox() {
-    try {
-        const complaintsSnapshot = await db.collection('admin_complaints')
-            .orderBy('timestamp', 'desc')
-            .get();
-        
-        displayComplaints(complaintsSnapshot.docs);
-    } catch (error) {
-        console.error('Error loading inbox:', error);
-        document.getElementById('complaints-list').innerHTML = 
-            '<div style="text-align: center; color: #ff0a54;">Error loading complaints</div>';
-    }
-}
-
-function displayComplaints(complaints) {
-    const container = document.getElementById('complaints-list');
-    container.innerHTML = '';
-    
-    if (complaints.length === 0) {
-        container.innerHTML = '<div style="text-align: center; padding: 2rem;">No complaints received yet</div>';
-        return;
-    }
-    
-    complaints.forEach(doc => {
-        const complaint = doc.data();
-        const complaintCard = document.createElement('div');
-        complaintCard.className = `complaint-card ${complaint.read ? 'read' : 'unread'}`;
-        
-        const timestamp = complaint.timestamp.toDate().toLocaleString();
-        
-        complaintCard.innerHTML = `
-            <div class="complaint-header">
-                <div class="user-info">
-                    <h4>${complaint.userDisplayName} (@${complaint.userNickname})</h4>
-                    <span class="complaint-time">${timestamp}</span>
-                </div>
-                <div class="complaint-status">
-                    <span class="status-badge ${complaint.status}">${complaint.status.toUpperCase()}</span>
-                    ${!complaint.read ? '<span class="unread-dot"></span>' : ''}
-                </div>
-            </div>
-            <div class="complaint-content">
-                <p>${complaint.complaintText}</p>
-            </div>
-            <div class="complaint-actions">
-                <button class="btn btn-secondary" onclick="viewUserProfile('${complaint.userId}')">VIEW PROFILE</button>
-                <button class="btn" onclick="replyToComplaint('${doc.id}', '${complaint.userId}')">REPLY</button>
-                <button class="btn btn-warning" onclick="markComplaintAsRead('${doc.id}')">MARK READ</button>
-                <button class="btn btn-danger" onclick="deleteComplaint('${doc.id}')">DELETE</button>
-            </div>
-        `;
-        
-        container.appendChild(complaintCard);
-    });
-}
-
-async function viewUserProfile(userId) {
-    try {
-        const userDoc = await db.collection('users').doc(userId).get();
-        if (!userDoc.exists) {
-            showNotification('User not found');
-            return;
-        }
-        
-        const userData = userDoc.data();
-        const profileHTML = `
-            <div class="user-profile-view">
-                <div class="profile-header">
-                    <img src="${userData.profilePic}" alt="Profile" class="profile-image-large ${userData.gender}">
-                    <div class="profile-info">
-                        <h3>${userData.displayName}</h3>
-                        <p>@${userData.nickname}</p>
-                        <p>Gender: ${userData.gender}</p>
-                        <p>Instagram: @${userData.instagram}</p>
-                    </div>
-                </div>
-                <div class="profile-stats">
-                    <div class="stat-row">
-                        <label>SHA256 Code:</label>
-                        <span class="user-code">${userData.loginCode}</span>
-                        <button onclick="copyUserCode('${userData.loginCode}')" class="copy-btn">COPY</button>
-                    </div>
-                    <div class="stat-row">
-                        <label>Balance:</label>
-                        <span>${formatCurrency(userData.balance, userData.currency)}</span>
-                    </div>
-                    <div class="stat-row">
-                        <label>Debt:</label>
-                        <span class="${userData.debt > 0 ? 'debt-amount' : ''}">${userData.debt > 0 ? formatCurrency(userData.debt, userData.currency) : '0'}</span>
-                    </div>
-                    <div class="stat-row">
-                        <label>KYC Status:</label>
-                        <span class="status-${userData.kycStatus}">${userData.kycStatus.toUpperCase()}</span>
-                    </div>
-                    <div class="stat-row">
-                        <label>Rep Score:</label>
-                        <span class="rep-${userData.repScore.toLowerCase()}">${userData.repScore}</span>
-                    </div>
-                    <div class="stat-row">
-                        <label>Registration Date:</label>
-                        <span>${userData.registrationDate.toDate().toLocaleDateString()}</span>
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        showProfileModal(profileHTML);
-    } catch (error) {
-        console.error('Error loading user profile:', error);
-        showNotification('Error loading user profile');
-    }
-}
-
-function showProfileModal(content) {
-    let modal = document.getElementById('user-profile-modal');
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'user-profile-modal';
-        modal.className = 'modal';
-        modal.innerHTML = `
-            <div class="modal-content large">
-                <span class="close" onclick="closeModal('user-profile-modal')">&times;</span>
-                <h2>USER PROFILE</h2>
-                <div id="user-profile-content"></div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-    }
-    
-    document.getElementById('user-profile-content').innerHTML = content;
-    showModal('user-profile-modal');
-}
-
-function copyUserCode(code) {
-    navigator.clipboard.writeText(code).then(() => {
-        showNotification('User code copied to clipboard');
-    }).catch(() => {
-        // Fallback for older browsers
-        const textArea = document.createElement('textarea');
-        textArea.value = code;
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textArea);
-        showNotification('User code copied to clipboard');
-    });
-}
-
-async function replyToComplaint(complaintId, userId) {
-    const reply = prompt('Enter your reply to this complaint:');
-    if (!reply) return;
-    
-    try {
-        // Send reply as notification to user
-        await db.collection('notifications').add({
-            userId: userId,
-            title: 'Admin Reply to Your Complaint',
-            message: reply,
-            timestamp: firebase.firestore.Timestamp.now(),
-            read: false,
-            type: 'admin_reply'
-        });
-        
-        // Update complaint status
-        await db.collection('admin_complaints').doc(complaintId).update({
-            status: 'replied',
-            adminReply: reply,
-            repliedAt: firebase.firestore.Timestamp.now()
-        });
-        
-        showNotification('Reply sent successfully');
-        loadAdminInbox();
-    } catch (error) {
-        console.error('Error sending reply:', error);
-        showNotification('Error sending reply');
-    }
-}
-
-async function markComplaintAsRead(complaintId) {
-    try {
-        await db.collection('admin_complaints').doc(complaintId).update({
-            read: true,
-            readAt: firebase.firestore.Timestamp.now()
-        });
-        
-        showNotification('Marked as read');
-        loadAdminInbox();
-    } catch (error) {
-        console.error('Error marking as read:', error);
-    }
-}
-
-async function deleteComplaint(complaintId) {
-    if (!confirm('Are you sure you want to delete this complaint?')) return;
-    
-    try {
-        await db.collection('admin_complaints').doc(complaintId).delete();
-        showNotification('Complaint deleted');
-        loadAdminInbox();
-    } catch (error) {
-        console.error('Error deleting complaint:', error);
-    }
-}
-
-async function markAllAsRead() {
-    if (!confirm('Mark all complaints as read?')) return;
-    
-    try {
-        const unreadComplaints = await db.collection('admin_complaints')
-            .where('read', '==', false)
-            .get();
-            
-        const batch = db.batch();
-        unreadComplaints.docs.forEach(doc => {
-            batch.update(doc.ref, {
-                read: true,
-                readAt: firebase.firestore.Timestamp.now()
-            });
-        });
-        
-        await batch.commit();
-        showNotification(`Marked ${unreadComplaints.size} complaints as read`);
-        loadAdminInbox();
-    } catch (error) {
-        console.error('Error marking all as read:', error);
-    }
-}
-
-function refreshInbox() {
-    loadAdminInbox();
-    showNotification('Inbox refreshed');
-}
-
-// Add missing showBuffering and hideBuffering functions
-function showBuffering() {
-    document.body.classList.add('loading');
-    // You can add a loading spinner here if needed
-}
-
-function hideBuffering() {
-    document.body.classList.remove('loading');
 }
