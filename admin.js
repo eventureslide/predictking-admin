@@ -50,19 +50,23 @@ document.addEventListener('DOMContentLoaded', function() {
 function showTab(tabName) {
     const content = document.getElementById('tab-content');
     const tabBtns = document.querySelectorAll('.tab-btn');
-    
+    /* Add right after those lines: */
     // Check if Firebase is initialized
     if (!firebase.apps.length) {
         console.error('Firebase not initialized');
         showNotification('Database connection error');
         return;
     }
-    
+    // Update active tab
     // Update active tab
     tabBtns.forEach(btn => btn.classList.remove('active'));
-    // Find the clicked button by tabName
-    const targetTab = document.querySelector(`[onclick*="${tabName}"]`);
-    if (targetTab) targetTab.classList.add('active');
+    if (event && event.target) {
+        event.target.classList.add('active');
+    } else {
+        // If called programmatically, find the tab by name
+        const targetTab = document.querySelector(`[onclick="showTab('${tabName}')"]`);
+        if (targetTab) targetTab.classList.add('active');
+    }
     
     // Load tab content
     switch(tabName) {
@@ -88,10 +92,6 @@ function showTab(tabName) {
         case 'analytics':
             content.innerHTML = createAnalyticsTab();
             loadAnalyticsData();
-            break;
-        case 'inbox':
-            content.innerHTML = createInboxTab();
-            loadInbox();
             break;
     }
 }
@@ -425,17 +425,11 @@ async function createEvent(e) {
         return;
     }
     
-    const profilePicUrl = document.getElementById('event-profile-pic').value;
-    if (!profilePicUrl) {
-        showNotification('Profile picture is required');
-        return;
-    }
-    
     const eventData = {
         title: document.getElementById('event-title').value,
         description: document.getElementById('event-description').value || '',
-        profilePic: profilePicUrl,
-        backgroundImage: document.getElementById('event-background').value || 'https://picsum.photos/seed/picsum/400/200',
+        profilePic: document.getElementById('event-profile-pic').value,
+        backgroundImage: document.getElementById('event-background').value || '',
         startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
         options: document.getElementById('event-options').value.split('\n').filter(opt => opt.trim()),
@@ -451,7 +445,6 @@ async function createEvent(e) {
     }
     
     try {
-        showBuffering();
         await db.collection('events').add(eventData);
         closeModal('create-event-modal');
         showNotification('Event created successfully');
@@ -459,11 +452,9 @@ async function createEvent(e) {
         
         // Reset form
         document.getElementById('create-event-form').reset();
-        hideBuffering();
     } catch (error) {
         console.error('Error creating event:', error);
-        showNotification('Error creating event: ' + error.message);
-        hideBuffering();
+        showNotification('Error creating event');
     }
 }
 
@@ -641,36 +632,21 @@ function handleMessageTypeChange() {
     }
 }
 
-async function loadUsersList() {
-    try {
-        const usersSnapshot = await db.collection('users').get();
-        const select = document.getElementById('target-user');
-        select.innerHTML = '<option value="">Select User</option>';
-        
-        usersSnapshot.docs.forEach(doc => {
-            const user = doc.data();
-            const option = document.createElement('option');
-            option.value = doc.id;
-            option.textContent = `${user.displayName} (@${user.nickname})`;
-            select.appendChild(option);
-        });
-    } catch (error) {
-        console.error('Error loading users list:', error);
-    }
+function loadUsersList() {
+    const select = document.getElementById('target-user');
+    select.innerHTML = '';
+    
+    users.forEach(user => {
+        const option = document.createElement('option');
+        option.value = user.id;
+        option.textContent = `${user.displayName} (@${user.nickname})`;
+        select.appendChild(option);
+    });
 }
 
 // Analytics Tab
 function createAnalyticsTab() {
     return `
-        <div class="analytics-controls">
-            <button class="btn" onclick="loadAnalyticsData()">REFRESH DATA</button>
-            <select id="analytics-period">
-                <option value="today">Today</option>
-                <option value="week">This Week</option>
-                <option value="month">This Month</option>
-            </select>
-        </div>
-        
         <div class="stats-grid" id="analytics-stats">
             <div class="stat-card">
                 <div class="stat-value" id="daily-signups">0</div>
@@ -688,123 +664,13 @@ function createAnalyticsTab() {
                 <div class="stat-value" id="conversion-rate">0%</div>
                 <div class="stat-label">KYC Conversion</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-value" id="total-ads-watched">0</div>
-                <div class="stat-label">Ads Watched</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value" id="total-buyins">₹0</div>
-                <div class="stat-label">Total Buy-ins</div>
-            </div>
         </div>
         
-        <h3>Activity Heatmap</h3>
-        <div class="activity-heatmap" id="activity-heatmap">
-            Loading heatmap data...
-        </div>
-        
-        <h3>Performance Trends</h3>
-        <div class="performance-charts" id="performance-charts">
-            <canvas id="performance-chart" width="400" height="200"></canvas>
+        <h3>User Activity Heatmap</h3>
+        <div class="logs-container" id="activity-analytics">
+            Loading analytics data...
         </div>
     `;
-}
-
-function createInboxTab() {
-    return `
-        <div class="inbox-header">
-            <h3>User Complaints & Messages</h3>
-            <button class="btn btn-secondary" onclick="loadInbox()">REFRESH</button>
-        </div>
-        <div class="inbox-list" id="inbox-list">
-            <div class="inbox-item">Loading complaints...</div>
-        </div>
-    `;
-}
-
-async function loadInbox() {
-    try {
-        const complaintsSnapshot = await db.collection('admin_complaints')
-            .orderBy('timestamp', 'desc')
-            .limit(50)
-            .get();
-        
-        const inboxList = document.getElementById('inbox-list');
-        inboxList.innerHTML = '';
-        
-        if (complaintsSnapshot.empty) {
-            inboxList.innerHTML = '<div class="inbox-item">No complaints received yet.</div>';
-            return;
-        }
-        
-        complaintsSnapshot.docs.forEach(doc => {
-            const complaint = doc.data();
-            const timestamp = complaint.timestamp.toDate().toLocaleString();
-            
-            const item = document.createElement('div');
-            item.className = `inbox-item ${complaint.read ? 'read' : 'unread'}`;
-            item.innerHTML = `
-                <div class="complaint-header">
-                    <strong>${complaint.userDisplayName} (@${complaint.userNickname})</strong>
-                    <span class="complaint-time">${timestamp}</span>
-                </div>
-                <div class="complaint-preview">${complaint.complaintText.substring(0, 100)}...</div>
-                <div class="complaint-actions">
-                    <button class="btn" onclick="viewComplaint('${doc.id}', '${complaint.complaintText}', '${complaint.userDisplayName}', '${complaint.userNickname}')">VIEW FULL</button>
-                    <button class="btn btn-secondary" onclick="markAsRead('${doc.id}')">MARK READ</button>
-                </div>
-            `;
-            inboxList.appendChild(item);
-        });
-        
-    } catch (error) {
-        console.error('Error loading inbox:', error);
-        showNotification('Error loading complaints');
-    }
-}
-
-function viewComplaint(complaintId, text, displayName, nickname) {
-    // Create full complaint modal
-    let modal = document.getElementById('complaint-view-modal');
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'complaint-view-modal';
-        modal.className = 'modal';
-        modal.innerHTML = `
-            <div class="modal-content">
-                <span class="close" onclick="closeModal('complaint-view-modal')">&times;</span>
-                <h2>User Complaint</h2>
-                <div id="complaint-details"></div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-    }
-    
-    document.getElementById('complaint-details').innerHTML = `
-        <div class="complaint-full">
-            <div class="user-info">
-                <strong>From:</strong> ${displayName} (@${nickname})
-            </div>
-            <div class="complaint-text">
-                <strong>Message:</strong><br>
-                ${text}
-            </div>
-        </div>
-    `;
-    
-    showModal('complaint-view-modal');
-    markAsRead(complaintId);
-}
-
-async function markAsRead(complaintId) {
-    try {
-        await db.collection('admin_complaints').doc(complaintId).update({
-            read: true
-        });
-        loadInbox(); // Refresh the list
-    } catch (error) {
-        console.error('Error marking as read:', error);
-    }
 }
 
 async function loadAnalyticsData() {
@@ -825,15 +691,7 @@ async function loadAnalyticsData() {
             .get();
             
         const bets = dailyActivity.docs.filter(doc => doc.data().action === 'bet_placed');
-        const adsWatched = dailyActivity.docs.filter(doc => doc.data().action === 'ad_view');
-        const buyins = dailyActivity.docs.filter(doc => doc.data().action === 'buyin');
-        
         document.getElementById('daily-bets').textContent = bets.length;
-        document.getElementById('total-ads-watched').textContent = adsWatched.length;
-        
-        // Calculate total buyins
-        const buyinTotal = buyins.reduce((sum, doc) => sum + (doc.data().data.amount || 0), 0);
-        document.getElementById('total-buyins').textContent = `₹${buyinTotal}`;
         
         // KYC Conversion rate
         const totalUsers = users.length;
@@ -841,35 +699,9 @@ async function loadAnalyticsData() {
         const conversionRate = totalUsers > 0 ? ((approvedUsers / totalUsers) * 100).toFixed(1) : 0;
         document.getElementById('conversion-rate').textContent = conversionRate + '%';
         
-        // Load activity heatmap
-        loadActivityHeatmap(dailyActivity.docs);
-        
     } catch (error) {
         console.error('Error loading analytics:', error);
     }
-}
-
-function loadActivityHeatmap(activities) {
-    const heatmapEl = document.getElementById('activity-heatmap');
-    const hours = new Array(24).fill(0);
-    
-    activities.forEach(doc => {
-        const timestamp = doc.data().timestamp.toDate();
-        const hour = timestamp.getHours();
-        hours[hour]++;
-    });
-    
-    let heatmapHTML = '<div class="heatmap-grid">';
-    hours.forEach((count, hour) => {
-        const intensity = Math.min(count / Math.max(...hours), 1);
-        heatmapHTML += `
-            <div class="heatmap-cell" style="background: rgba(158, 240, 26, ${intensity})" title="${hour}:00 - ${count} activities">
-                ${hour}
-            </div>
-        `;
-    });
-    heatmapHTML += '</div>';
-    heatmapEl.innerHTML = heatmapHTML;
 }
 
 // Utility Functions
