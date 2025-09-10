@@ -50,14 +50,14 @@ document.addEventListener('DOMContentLoaded', function() {
 function showTab(tabName) {
     const content = document.getElementById('tab-content');
     const tabBtns = document.querySelectorAll('.tab-btn');
-    /* Add right after those lines: */
+    
     // Check if Firebase is initialized
-    if (!firebase.apps.length) {
+    if (!firebase.apps || !firebase.apps.length) {
         console.error('Firebase not initialized');
-        showNotification('Database connection error');
+        showNotification('Database connection error. Please refresh the page.');
         return;
     }
-    // Update active tab
+    
     // Update active tab
     tabBtns.forEach(btn => btn.classList.remove('active'));
     if (event && event.target) {
@@ -420,32 +420,44 @@ async function createEvent(e) {
     e.preventDefault();
     
     const startTimeInput = document.getElementById('event-start').value;
+    const profilePicInput = document.getElementById('event-profile-pic').value;
+    const optionsInput = document.getElementById('event-options').value;
+    
     if (!startTimeInput) {
         showNotification('Please select start time');
+        return;
+    }
+    
+    if (!profilePicInput) {
+        showNotification('Please provide profile picture URL');
+        return;
+    }
+    
+    const options = optionsInput.split('\n').filter(opt => opt.trim());
+    if (options.length < 2) {
+        showNotification('Please add at least 2 betting options');
         return;
     }
     
     const eventData = {
         title: document.getElementById('event-title').value,
         description: document.getElementById('event-description').value || '',
-        profilePic: document.getElementById('event-profile-pic').value,
+        profilePic: profilePicInput,
         backgroundImage: document.getElementById('event-background').value || '',
         startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
-        options: document.getElementById('event-options').value.split('\n').filter(opt => opt.trim()),
+        options: options,
         status: 'active',
         totalBets: 0,
         totalPot: 0,
-        createdAt: firebase.firestore.Timestamp.now()
+        createdAt: firebase.firestore.Timestamp.now(),
+        createdBy: 'admin'
     };
     
-    if (eventData.options.length < 2) {
-        showNotification('Please add at least 2 betting options');
-        return;
-    }
-    
     try {
-        await db.collection('events').add(eventData);
+        const docRef = await db.collection('events').add(eventData);
+        console.log('Event created with ID:', docRef.id);
+        
         closeModal('create-event-modal');
         showNotification('Event created successfully');
         loadEventsGrid();
@@ -454,7 +466,7 @@ async function createEvent(e) {
         document.getElementById('create-event-form').reset();
     } catch (error) {
         console.error('Error creating event:', error);
-        showNotification('Error creating event');
+        showNotification('Error creating event: ' + error.message);
     }
 }
 
@@ -575,12 +587,22 @@ async function sendMessage(e) {
     const subject = document.getElementById('message-subject').value;
     const content = document.getElementById('message-content').value;
     
+    if (!subject || !content) {
+        showNotification('Please fill in all fields');
+        return;
+    }
+    
     try {
         let targetUsers = [];
         
         switch(messageType) {
             case 'individual':
-                targetUsers = [document.getElementById('target-user').value];
+                const selectedUserId = document.getElementById('target-user').value;
+                if (!selectedUserId) {
+                    showNotification('Please select a user');
+                    return;
+                }
+                targetUsers = [selectedUserId];
                 break;
             case 'bulk':
                 targetUsers = users.map(u => u.id);
@@ -593,6 +615,11 @@ async function sendMessage(e) {
                 break;
         }
         
+        if (targetUsers.length === 0) {
+            showNotification('No users found for the selected criteria');
+            return;
+        }
+        
         // Send notifications to all target users
         const batch = db.batch();
         targetUsers.forEach(userId => {
@@ -603,7 +630,8 @@ async function sendMessage(e) {
                 message: content,
                 timestamp: firebase.firestore.Timestamp.now(),
                 read: false,
-                type: 'admin'
+                type: 'admin',
+                priority: 'high'
             });
         });
         
@@ -617,6 +645,7 @@ async function sendMessage(e) {
         
     } catch (error) {
         console.error('Error sending message:', error);
+        showNotification('Error sending message: ' + error.message);
     }
 }
 
@@ -634,12 +663,12 @@ function handleMessageTypeChange() {
 
 function loadUsersList() {
     const select = document.getElementById('target-user');
-    select.innerHTML = '';
+    select.innerHTML = '<option value="">Select a user...</option>';
     
     users.forEach(user => {
         const option = document.createElement('option');
         option.value = user.id;
-        option.textContent = `${user.displayName} (@${user.nickname})`;
+        option.textContent = `${user.displayName || user.nickname} (@${user.nickname})`;
         select.appendChild(option);
     });
 }
@@ -664,6 +693,26 @@ function createAnalyticsTab() {
                 <div class="stat-value" id="conversion-rate">0%</div>
                 <div class="stat-label">KYC Conversion</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-value" id="ads-watched">0</div>
+                <div class="stat-label">Ads Watched Today</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="total-buyins">₹0</div>
+                <div class="stat-label">Total Buy-ins</div>
+            </div>
+        </div>
+        
+        <h3>Performance Charts</h3>
+        <div class="analytics-charts">
+            <div class="chart-container">
+                <h4>Weekly User Activity</h4>
+                <div id="activity-chart" class="chart-placeholder">Loading chart...</div>
+            </div>
+            <div class="chart-container">
+                <h4>Daily Revenue Trend</h4>
+                <div id="revenue-chart" class="chart-placeholder">Loading chart...</div>
+            </div>
         </div>
         
         <h3>User Activity Heatmap</h3>
@@ -679,19 +728,47 @@ async function loadAnalyticsData() {
         today.setHours(0, 0, 0, 0);
         const todayTimestamp = firebase.firestore.Timestamp.fromDate(today);
         
+        const lastWeek = new Date();
+        lastWeek.setDate(lastWeek.getDate() - 7);
+        const weekTimestamp = firebase.firestore.Timestamp.fromDate(lastWeek);
+        
         // Daily signups
         const dailySignups = await db.collection('users')
             .where('registrationDate', '>=', todayTimestamp)
             .get();
         document.getElementById('daily-signups').textContent = dailySignups.size;
         
-        // Daily activity
+        // Daily activity logs
         const dailyActivity = await db.collection('activity_logs')
             .where('timestamp', '>=', todayTimestamp)
             .get();
             
         const bets = dailyActivity.docs.filter(doc => doc.data().action === 'bet_placed');
+        const ads = dailyActivity.docs.filter(doc => doc.data().action === 'ad_view');
+        const buyins = dailyActivity.docs.filter(doc => doc.data().action === 'buyin');
+        
         document.getElementById('daily-bets').textContent = bets.length;
+        document.getElementById('ads-watched').textContent = ads.length;
+        
+        // Calculate total buy-ins
+        let totalBuyins = 0;
+        buyins.forEach(buyin => {
+            const data = buyin.data();
+            if (data.data && data.data.amount) {
+                totalBuyins += data.data.amount;
+            }
+        });
+        document.getElementById('total-buyins').textContent = `₹${totalBuyins}`;
+        
+        // Calculate daily revenue (vig from bets)
+        let dailyRevenue = 0;
+        bets.forEach(bet => {
+            const data = bet.data();
+            if (data.data && data.data.amount && data.data.vig) {
+                dailyRevenue += (data.data.amount * data.data.vig / 100);
+            }
+        });
+        document.getElementById('daily-revenue').textContent = `₹${Math.round(dailyRevenue)}`;
         
         // KYC Conversion rate
         const totalUsers = users.length;
@@ -699,8 +776,59 @@ async function loadAnalyticsData() {
         const conversionRate = totalUsers > 0 ? ((approvedUsers / totalUsers) * 100).toFixed(1) : 0;
         document.getElementById('conversion-rate').textContent = conversionRate + '%';
         
+        // Load activity heatmap
+        await loadActivityHeatmap();
+        
     } catch (error) {
         console.error('Error loading analytics:', error);
+        showNotification('Error loading analytics data');
+    }
+}
+
+async function loadActivityHeatmap() {
+    try {
+        const container = document.getElementById('activity-analytics');
+        const lastWeek = new Date();
+        lastWeek.setDate(lastWeek.getDate() - 7);
+        
+        const weeklyActivity = await db.collection('activity_logs')
+            .where('timestamp', '>=', firebase.firestore.Timestamp.fromDate(lastWeek))
+            .orderBy('timestamp', 'desc')
+            .limit(50)
+            .get();
+        
+        container.innerHTML = '';
+        
+        const activityByDay = {};
+        weeklyActivity.docs.forEach(log => {
+            const data = log.data();
+            const date = data.timestamp.toDate().toDateString();
+            
+            if (!activityByDay[date]) {
+                activityByDay[date] = { logins: 0, bets: 0, ads: 0, buyins: 0 };
+            }
+            
+            switch(data.action) {
+                case 'login': activityByDay[date].logins++; break;
+                case 'bet_placed': activityByDay[date].bets++; break;
+                case 'ad_view': activityByDay[date].ads++; break;
+                case 'buyin': activityByDay[date].buyins++; break;
+            }
+        });
+        
+        Object.keys(activityByDay).forEach(date => {
+            const dayData = activityByDay[date];
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `
+                <span class="log-timestamp">[${date}]</span>
+                <span>Logins: ${dayData.logins} | Bets: ${dayData.bets} | Ads: ${dayData.ads} | Buy-ins: ${dayData.buyins}</span>
+            `;
+            container.appendChild(entry);
+        });
+        
+    } catch (error) {
+        console.error('Error loading activity heatmap:', error);
     }
 }
 
