@@ -50,21 +50,25 @@ document.addEventListener('DOMContentLoaded', function() {
 function showTab(tabName) {
     const content = document.getElementById('tab-content');
     const tabBtns = document.querySelectorAll('.tab-btn');
-    
+    /* Add right after those lines: */
+    // Check if Firebase is initialized
     if (!firebase.apps.length) {
         console.error('Firebase not initialized');
         showNotification('Database connection error');
         return;
     }
-    
+    // Update active tab
+    // Update active tab
     tabBtns.forEach(btn => btn.classList.remove('active'));
     if (event && event.target) {
         event.target.classList.add('active');
     } else {
+        // If called programmatically, find the tab by name
         const targetTab = document.querySelector(`[onclick="showTab('${tabName}')"]`);
         if (targetTab) targetTab.classList.add('active');
     }
     
+    // Load tab content
     switch(tabName) {
         case 'dashboard':
             content.innerHTML = createDashboardTab();
@@ -88,10 +92,6 @@ function showTab(tabName) {
         case 'analytics':
             content.innerHTML = createAnalyticsTab();
             loadAnalyticsData();
-            break;
-        case 'complaints':
-            content.innerHTML = createComplaintsTab();
-            loadComplaintsTable();
             break;
     }
 }
@@ -425,18 +425,6 @@ async function createEvent(e) {
         return;
     }
     
-    const options = document.getElementById('event-options').value.split('\n').filter(opt => opt.trim());
-    if (options.length < 2) {
-        showNotification('Please add at least 2 betting options');
-        return;
-    }
-    
-    // Create option totals object
-    const optionTotals = {};
-    options.forEach(option => {
-        optionTotals[option] = 0;
-    });
-    
     const eventData = {
         title: document.getElementById('event-title').value,
         description: document.getElementById('event-description').value || '',
@@ -444,24 +432,29 @@ async function createEvent(e) {
         backgroundImage: document.getElementById('event-background').value || '',
         startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
-        options: options,
+        options: document.getElementById('event-options').value.split('\n').filter(opt => opt.trim()),
         status: 'active',
         totalBets: 0,
         totalPot: 0,
-        createdAt: firebase.firestore.Timestamp.now(),
-        bets: {},
-        optionTotals: optionTotals
+        createdAt: firebase.firestore.Timestamp.now()
     };
+    
+    if (eventData.options.length < 2) {
+        showNotification('Please add at least 2 betting options');
+        return;
+    }
     
     try {
         await db.collection('events').add(eventData);
         closeModal('create-event-modal');
         showNotification('Event created successfully');
         loadEventsGrid();
+        
+        // Reset form
         document.getElementById('create-event-form').reset();
     } catch (error) {
         console.error('Error creating event:', error);
-        showNotification('Error creating event: ' + error.message);
+        showNotification('Error creating event');
     }
 }
 
@@ -678,101 +671,6 @@ function createAnalyticsTab() {
             Loading analytics data...
         </div>
     `;
-}
-
-// Complaints Tab
-function createComplaintsTab() {
-    return `
-        <div class="form-group">
-            <button class="btn" onclick="refreshComplaints()">REFRESH COMPLAINTS</button>
-            <button class="btn btn-secondary" onclick="markAllComplaintsRead()">MARK ALL READ</button>
-        </div>
-        
-        <table class="users-table" id="complaints-table">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>User</th>
-                    <th>Nickname</th>
-                    <th>SHA256</th>
-                    <th>Complaint</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="complaints-tbody">
-                <tr><td colspan="7">Loading complaints...</td></tr>
-            </tbody>
-        </table>
-    `;
-}
-
-async function loadComplaintsTable() {
-    try {
-        const complaintsSnapshot = await db.collection('admin_complaints')
-            .orderBy('timestamp', 'desc')
-            .get();
-        
-        const tbody = document.getElementById('complaints-tbody');
-        tbody.innerHTML = '';
-        
-        if (complaintsSnapshot.empty) {
-            tbody.innerHTML = '<tr><td colspan="7">No complaints yet</td></tr>';
-            return;
-        }
-        
-        complaintsSnapshot.docs.forEach(doc => {
-            const complaint = doc.data();
-            const row = document.createElement('tr');
-            
-            row.innerHTML = `
-                <td>${complaint.timestamp.toDate().toLocaleDateString()}</td>
-                <td>${complaint.userDisplayName}</td>
-                <td>@${complaint.userNickname}</td>
-                <td>${complaint.userLoginCode || 'N/A'}</td>
-                <td style="max-width: 200px; word-wrap: break-word;">${complaint.complaintText}</td>
-                <td><span class="status-${complaint.status}">${complaint.status.toUpperCase()}</span></td>
-                <td class="user-actions">
-                    <button class="btn btn-secondary" onclick="markComplaintRead('${doc.id}')">MARK READ</button>
-                    <button class="btn btn-danger" onclick="deleteComplaint('${doc.id}')">DELETE</button>
-                </td>
-            `;
-            
-            tbody.appendChild(row);
-        });
-    } catch (error) {
-        console.error('Error loading complaints:', error);
-    }
-}
-
-async function markComplaintRead(complaintId) {
-    try {
-        await db.collection('admin_complaints').doc(complaintId).update({
-            status: 'read',
-            read: true
-        });
-        showNotification('Complaint marked as read');
-        loadComplaintsTable();
-    } catch (error) {
-        console.error('Error marking complaint as read:', error);
-    }
-}
-
-async function deleteComplaint(complaintId) {
-    if (!confirm('Delete this complaint?')) return;
-    
-    try {
-        await db.collection('admin_complaints').doc(complaintId).delete();
-        showNotification('Complaint deleted');
-        loadComplaintsTable();
-    } catch (error) {
-        console.error('Error deleting complaint:', error);
-    }
-}
-
-function refreshComplaints() {
-    loadComplaintsTable();
-    showNotification('Complaints refreshed');
 }
 
 async function loadAnalyticsData() {
