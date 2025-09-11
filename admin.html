@@ -353,6 +353,8 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        
     </style>
 </head>
 <body>
@@ -363,12 +365,15 @@
         </header>
 
         <nav class="admin-tabs">
-            <button class="tab-btn active" onclick="showTab('dashboard')">Dashboard</button>
-            <button class="tab-btn" onclick="showTab('users')">Users & KYC</button>
-            <button class="tab-btn" onclick="showTab('events')">Events</button>
-            <button class="tab-btn" onclick="showTab('settings')">Settings</button>
-            <button class="tab-btn" onclick="showTab('messages')">Messages</button>
-            <button class="tab-btn" onclick="showTab('analytics')">Analytics</button>
+            <button class="tab-btn active" onclick="showTab('dashboard', event)">Dashboard</button>
+
+            <button class="tab-btn" onclick="showTab('users', event)">Users & KYC</button>
+            <button class="tab-btn" onclick="showTab('events', event)">Events</button>
+            <button class="tab-btn" onclick="showTab('settings', event)">Settings</button>
+            <button class="tab-btn" onclick="showTab('messages', event)">Messages</button>
+            <button class="tab-btn" onclick="showTab('analytics', event)">Analytics</button>
+            <button class="tab-btn" onclick="showTab('inbox', event)">Inbox</button>
+
         </nav>
 
         <main class="tab-content" id="tab-content">
@@ -427,17 +432,20 @@
                     <label for="message-type">Message Type</label>
                     <select id="message-type">
                         <option value="individual">Individual User</option>
+                        <option value="multiple">Multiple Users</option>
                         <option value="bulk">All Users</option>
                         <option value="kyc-pending">KYC Pending</option>
                         <option value="debt">Users with Debt</option>
                     </select>
+
                 </div>
-                <div class="form-group" id="user-select-group">
-                    <label for="target-user">Select User</label>
-                    <select id="target-user">
+                <div class="form-group" id="user-select-group" style="display:none;">
+                    <label for="target-user">Select User(s)</label>
+                    <select id="target-user" multiple>
                         <!-- Users will be populated here -->
                     </select>
                 </div>
+
                 <div class="form-group">
                     <label for="message-subject">Subject</label>
                     <input type="text" id="message-subject" required>

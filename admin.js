@@ -9,11 +9,18 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-// Initialize Firebase
-if (!firebase.apps.length) {
-    firebase.initializeApp(firebaseConfig);
+// Initialize Firebase with better error handling
+let db;
+try {
+    if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+    }
+    db = firebase.firestore();
+    console.log('Firebase initialized successfully');
+} catch (error) {
+    console.error('Firebase initialization failed:', error);
+    alert('Database connection failed. Please refresh the page.');
 }
-const db = firebase.firestore();
 
 // Global Variables
 let users = [];
@@ -47,23 +54,14 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // Tab Management
-function showTab(tabName) {
+function showTab(tabName, e) {
     const content = document.getElementById('tab-content');
     const tabBtns = document.querySelectorAll('.tab-btn');
-    /* Add right after those lines: */
-    // Check if Firebase is initialized
-    if (!firebase.apps.length) {
-        console.error('Firebase not initialized');
-        showNotification('Database connection error');
-        return;
-    }
-    // Update active tab
-    // Update active tab
+
     tabBtns.forEach(btn => btn.classList.remove('active'));
-    if (event && event.target) {
-        event.target.classList.add('active');
+    if (e && e.target) {
+        e.target.classList.add('active');
     } else {
-        // If called programmatically, find the tab by name
         const targetTab = document.querySelector(`[onclick="showTab('${tabName}')"]`);
         if (targetTab) targetTab.classList.add('active');
     }
@@ -93,6 +91,11 @@ function showTab(tabName) {
             content.innerHTML = createAnalyticsTab();
             loadAnalyticsData();
             break;
+        case 'inbox':
+            content.innerHTML = createInboxTab();
+            loadInbox();
+            break;
+
     }
 }
 
@@ -568,6 +571,38 @@ function createMessagesTab() {
     `;
 }
 
+
+async function loadMessageHistory() {
+    try {
+        const messagesSnapshot = await db.collection('notifications')
+            .orderBy('timestamp', 'desc')
+            .limit(20)
+            .get();
+
+        const container = document.getElementById('message-history');
+        container.innerHTML = '';
+
+        messagesSnapshot.docs.forEach(doc => {
+            const data = doc.data();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+
+            const timestamp = data.timestamp?.toDate().toLocaleString() || 'Unknown time';
+            entry.innerHTML = `
+                <span class="log-timestamp">[${timestamp}]</span>
+                <span>${data.title} → ${data.message}</span>
+            `;
+
+            container.appendChild(entry);
+        });
+    } catch (error) {
+        console.error('Error loading message history:', error);
+        document.getElementById('message-history').innerHTML =
+            `<div class="log-entry">Error loading messages</div>`;
+    }
+}
+
+
 async function sendMessage(e) {
     e.preventDefault();
     
@@ -582,6 +617,9 @@ async function sendMessage(e) {
             case 'individual':
                 targetUsers = [document.getElementById('target-user').value];
                 break;
+            case 'multiple':
+                targetUsers = Array.from(document.getElementById('target-user').selectedOptions).map(opt => opt.value);
+                break;
             case 'bulk':
                 targetUsers = users.map(u => u.id);
                 break;
@@ -592,6 +630,7 @@ async function sendMessage(e) {
                 targetUsers = users.filter(u => u.debt > 0).map(u => u.id);
                 break;
         }
+
         
         // Send notifications to all target users
         const batch = db.batch();
@@ -624,13 +663,14 @@ function handleMessageTypeChange() {
     const messageType = document.getElementById('message-type').value;
     const userSelectGroup = document.getElementById('user-select-group');
     
-    if (messageType === 'individual') {
+    if (messageType === 'individual' || messageType === 'multiple') {
         userSelectGroup.style.display = 'block';
         loadUsersList();
     } else {
         userSelectGroup.style.display = 'none';
     }
 }
+
 
 function loadUsersList() {
     const select = document.getElementById('target-user');
@@ -643,6 +683,7 @@ function loadUsersList() {
         select.appendChild(option);
     });
 }
+
 
 // Analytics Tab
 function createAnalyticsTab() {
@@ -703,6 +744,77 @@ async function loadAnalyticsData() {
         console.error('Error loading analytics:', error);
     }
 }
+
+function createInboxTab() {
+    return `
+        <h3>📥 Complaints Inbox</h3>
+        <div class="logs-container" id="complaints-list">
+            <div class="log-entry">Loading complaints...</div>
+        </div>
+    `;
+}
+
+async function loadInbox() {
+    try {
+        const complaintsSnapshot = await db.collection('admin_complaints')
+            .orderBy('timestamp', 'desc')
+            .limit(50)
+            .get();
+
+        const container = document.getElementById('complaints-list');
+        container.innerHTML = '';
+
+        for (const doc of complaintsSnapshot.docs) {
+            const data = doc.data();
+            const user = users.find(u => u.id === data.userId);
+
+            const displayName = user ? user.displayName : "Unknown";
+            const nickname = user ? user.nickname : "";
+            // ✅ if complaintNumber missing in complaint doc, fallback to user.complaintCount
+            const complaintNumber = data.complaintNumber || 69; // Use stored number or default to 1
+            const timestamp = data.timestamp?.toDate().toLocaleString() || "Unknown";
+
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `
+                <span class="log-timestamp">[${timestamp}]</span>
+                <strong>${displayName} (@${nickname})</strong><br>
+                Complaint #${complaintNumber}: ${data.complaintText}
+                <div class="user-actions">
+                    <button class="btn btn-secondary" onclick="replyToComplaint('${data.userId}', ${complaintNumber})">Reply</button>
+                </div>
+            `;
+
+            container.appendChild(entry);
+        }
+    } catch (error) {
+        console.error('Error loading inbox:', error);
+    }
+}
+
+
+
+async function replyToComplaint(userId, complaintNumber) {
+    const replyMessage = prompt("Enter your reply:");
+    if (!replyMessage) return;
+
+    try {
+        await db.collection('notifications').add({
+            userId: userId,
+            title: `Reply to Complaint ${complaintNumber}`,
+            message: replyMessage,
+            timestamp: firebase.firestore.Timestamp.now(),
+            read: false,
+            type: 'admin-reply'
+        });
+
+        showNotification(`Reply sent for complaint #${complaintNumber}`);
+    } catch (error) {
+        console.error('Error sending reply:', error);
+    }
+}
+
+
 
 // Utility Functions
 function formatCurrency(amount, currency = 'INR') {
