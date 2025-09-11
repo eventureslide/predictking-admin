@@ -418,18 +418,22 @@ async function loadEventsGrid() {
     }
 }
 
-function displayEventsGrid() {
+async function displayEventsGrid() {
     const grid = document.getElementById('events-grid');
     grid.innerHTML = '';
     
     // Filter out archived events
     const activeEvents = events.filter(e => e.archive_status !== 'archived');
     
-    activeEvents.forEach(event => {
+    for (const event of activeEvents) {
         const card = document.createElement('div');
         card.className = 'event-card';
         
         const startTime = event.startTime ? new Date(event.startTime.seconds * 1000).toLocaleString() : 'TBD';
+        
+        // Get vote counts for this event
+        const voteCounts = await getEventVoteCounts(event.id);
+        const voteCountsHtml = generateVoteCountsHtml(voteCounts);
         
         card.innerHTML = `
             <h3>${event.title}</h3>
@@ -438,6 +442,7 @@ function displayEventsGrid() {
             <p><strong>Display:</strong> <span class="event-status ${event.display_status || 'visible'}">${(event.display_status || 'visible').toUpperCase()}</span></p>
             <p><strong>Total Bets:</strong> ${event.totalBets || 0}</p>
             <p><strong>Total Pot:</strong> ₹${event.totalPot || 0}</p>
+            ${voteCountsHtml}
             <div class="user-actions">
                 <button class="btn btn-secondary" onclick="editEvent('${event.id}')">EDIT</button>
                 ${event.status === 'active' ? `<button class="btn btn-warning" onclick="settleEvent('${event.id}')">SETTLE</button>` : ''}
@@ -448,7 +453,43 @@ function displayEventsGrid() {
         `;
         
         grid.appendChild(card);
-    });
+    }
+}
+
+
+// Get vote counts for a specific event
+async function getEventVoteCounts(eventId) {
+    try {
+        const votesSnapshot = await db.collection('event_votes')
+            .where('eventId', '==', eventId)
+            .get();
+        
+        const voteCounts = {};
+        votesSnapshot.docs.forEach(doc => {
+            const vote = doc.data();
+            const winner = vote.selectedWinner;
+            voteCounts[winner] = (voteCounts[winner] || 0) + 1;
+        });
+        
+        return voteCounts;
+    } catch (error) {
+        console.error('Error getting vote counts:', error);
+        return {};
+    }
+}
+
+// Generate HTML for displaying vote counts
+function generateVoteCountsHtml(voteCounts) {
+    if (Object.keys(voteCounts).length === 0) {
+        return '<p><strong>Votes:</strong> No votes yet</p>';
+    }
+    
+    const voteItems = Object.entries(voteCounts)
+        .sort(([,a], [,b]) => b - a) // Sort by vote count descending
+        .map(([team, count]) => `${team}: ${count}`)
+        .join(', ');
+    
+    return `<p><strong>Votes:</strong> ${voteItems}</p>`;
 }
 
 // Replace the entire createEvent function with:
@@ -671,13 +712,13 @@ async function loadArchivedEvents() {
             .orderBy('archivedAt', 'desc')
             .get();
         const archivedEvents = eventsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        displayArchivedEvents(archivedEvents);
+        await displayArchivedEvents(archivedEvents);
     } catch (error) {
         console.error('Error loading archived events:', error);
     }
 }
 
-function displayArchivedEvents(archivedEvents) {
+async function displayArchivedEvents(archivedEvents) {
     const grid = document.getElementById('archived-events-grid');
     grid.innerHTML = '';
     
@@ -686,12 +727,16 @@ function displayArchivedEvents(archivedEvents) {
         return;
     }
     
-    archivedEvents.forEach(event => {
+    for (const event of archivedEvents) {
         const card = document.createElement('div');
         card.className = 'event-card archived';
         
         const startTime = event.startTime ? new Date(event.startTime.seconds * 1000).toLocaleString() : 'TBD';
         const archivedTime = event.archivedAt ? new Date(event.archivedAt.seconds * 1000).toLocaleString() : 'Unknown';
+        
+        // Get vote counts for archived events too
+        const voteCounts = await getEventVoteCounts(event.id);
+        const voteCountsHtml = generateVoteCountsHtml(voteCounts);
         
         card.innerHTML = `
             <h3>${event.title}</h3>
@@ -701,6 +746,7 @@ function displayArchivedEvents(archivedEvents) {
             <p><strong>Winner:</strong> ${event.winner || 'N/A'}</p>
             <p><strong>Total Bets:</strong> ${event.totalBets || 0}</p>
             <p><strong>Total Pot:</strong> ₹${event.totalPot || 0}</p>
+            ${voteCountsHtml}
             <div class="user-actions">
                 <button class="btn btn-info" onclick="unarchiveEvent('${event.id}')">UNARCHIVE</button>
                 <button class="btn btn-danger" onclick="permanentlyDeleteEvent('${event.id}')">PERMANENT DELETE</button>
@@ -708,7 +754,7 @@ function displayArchivedEvents(archivedEvents) {
         `;
         
         grid.appendChild(card);
-    });
+    }
 }
 
 async function unarchiveEvent(eventId) {
