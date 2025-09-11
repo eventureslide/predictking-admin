@@ -217,8 +217,13 @@
         }
 
         .debt-amount {
-            color: #ff0a54;
-            font-weight: 700;
+            color: #ff0a54 !important;
+            font-weight: bold;
+        }
+
+        .event-card.archived {
+            opacity: 0.8;
+            border-left: 4px solid #666;
         }
 
         .events-grid {
@@ -355,7 +360,68 @@
         }
 
         
+        .analytics-controls {
+            background: rgba(158, 240, 26, 0.1);
+            border: 1px solid #9ef01a;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .analytics-controls .form-group {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 0;
+        }
+
+        .analytics-controls select {
+            max-width: 200px;
+        }
+
+        .charts-container {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .chart-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 2rem;
+        }
+
+        .chart-section {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        .chart-section h3 {
+            color: #9ef01a;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+
+        .chart-section canvas {
+            max-height: 300px;
+        }
+
+        @media (max-width: 768px) {
+            .chart-row {
+                grid-template-columns: 1fr;
+            }
+            
+            .analytics-controls .form-group {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
 </head>
 <body>
     <div class="admin-container">
@@ -373,6 +439,7 @@
             <button class="tab-btn" onclick="showTab('messages', event)">Messages</button>
             <button class="tab-btn" onclick="showTab('analytics', event)">Analytics</button>
             <button class="tab-btn" onclick="showTab('inbox', event)">Inbox</button>
+            <button class="tab-btn" onclick="showTab('archived')">Archived Events</button>
 
         </nav>
 

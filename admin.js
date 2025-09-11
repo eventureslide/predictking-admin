@@ -80,6 +80,10 @@ function showTab(tabName, e) {
             content.innerHTML = createEventsTab();
             loadEventsGrid();
             break;
+        case 'archived':
+            content.innerHTML = createArchivedEventsTab();
+            loadArchivedEvents();
+            break;
         case 'settings':
             content.innerHTML = createSettingsTab();
             loadSettingsForm();
@@ -95,7 +99,6 @@ function showTab(tabName, e) {
             content.innerHTML = createInboxTab();
             loadInbox();
             break;
-
     }
 }
 
@@ -222,7 +225,6 @@ function createUsersTab() {
                     <th>KYC Status</th>
                     <th>Rep Score</th>
                     <th>Balance</th>
-                    <th>Debt</th>
                     <th>Instagram</th>
                     <th>Actions</th>
                 </tr>
@@ -251,9 +253,10 @@ function displayUsersTable() {
     users.forEach(user => {
         const row = document.createElement('tr');
         
-        const balanceDisplay = user.debt > 0 ? 
-            `<span class="debt-amount">-${formatCurrency(user.debt, user.currency)}</span>` :
-            formatCurrency(user.balance, user.currency);
+        // Calculate actual balance (positive or negative)
+        const actualBalance = user.balance - (user.debt || 0);
+        const balanceClass = actualBalance < 0 ? 'debt-amount' : '';
+        const balanceDisplay = `<span class="${balanceClass}">${formatCurrency(actualBalance, user.currency)}</span>`;
             
         row.innerHTML = `
             <td>${user.nickname}</td>
@@ -261,7 +264,6 @@ function displayUsersTable() {
             <td><span class="status-${user.kycStatus}">${user.kycStatus.toUpperCase()}</span></td>
             <td><span class="rep-${user.repScore.toLowerCase()}">${user.repScore}</span></td>
             <td>${balanceDisplay}</td>
-            <td>${user.debt > 0 ? formatCurrency(user.debt, user.currency) : '0'}</td>
             <td>@${user.instagram}</td>
             <td class="user-actions">
                 ${user.kycStatus === 'pending' ? 
@@ -271,12 +273,37 @@ function displayUsersTable() {
                     ${user.repScore === 'GOOD' ? 'MARK BAD' : 'MARK GOOD'}
                 </button>
                 <button class="btn btn-secondary" onclick="adjustBalance('${user.id}')">ADJUST</button>
+                <button class="btn btn-primary" onclick="sendIndividualMessage('${user.id}', '${user.displayName}')">MESSAGE</button>
                 <button class="btn btn-danger" onclick="deleteUser('${user.id}')">DELETE</button>
             </td>
         `;
         
         tbody.appendChild(row);
     });
+}
+
+async function sendIndividualMessage(userId, displayName) {
+    const subject = prompt(`Enter message title for ${displayName}:`);
+    if (!subject) return;
+    
+    const message = prompt('Enter message content:');
+    if (!message) return;
+    
+    try {
+        await db.collection('notifications').add({
+            userId: userId,
+            title: subject,
+            message: message,
+            timestamp: firebase.firestore.Timestamp.now(),
+            read: false,
+            type: 'admin'
+        });
+        
+        showNotification(`Message sent to ${displayName}`);
+    } catch (error) {
+        console.error('Error sending message:', error);
+        showNotification('Error sending message');
+    }
 }
 
 async function approveKYC(userId) {
@@ -395,7 +422,10 @@ function displayEventsGrid() {
     const grid = document.getElementById('events-grid');
     grid.innerHTML = '';
     
-    events.forEach(event => {
+    // Filter out archived events
+    const activeEvents = events.filter(e => e.archive_status !== 'archived');
+    
+    activeEvents.forEach(event => {
         const card = document.createElement('div');
         card.className = 'event-card';
         
@@ -405,11 +435,14 @@ function displayEventsGrid() {
             <h3>${event.title}</h3>
             <p><strong>Start:</strong> ${startTime}</p>
             <p><strong>Status:</strong> <span class="event-status ${event.status}">${event.status.toUpperCase()}</span></p>
+            <p><strong>Display:</strong> <span class="event-status ${event.display_status || 'visible'}">${(event.display_status || 'visible').toUpperCase()}</span></p>
             <p><strong>Total Bets:</strong> ${event.totalBets || 0}</p>
             <p><strong>Total Pot:</strong> ₹${event.totalPot || 0}</p>
             <div class="user-actions">
                 <button class="btn btn-secondary" onclick="editEvent('${event.id}')">EDIT</button>
-                <button class="btn btn-warning" onclick="settleEvent('${event.id}')">SETTLE</button>
+                ${event.status === 'active' ? `<button class="btn btn-warning" onclick="settleEvent('${event.id}')">SETTLE</button>` : ''}
+                ${event.display_status !== 'hidden' ? `<button class="btn btn-info" onclick="hideEvent('${event.id}')">HIDE</button>` : `<button class="btn btn-info" onclick="showEvent('${event.id}')">SHOW</button>`}
+                <button class="btn btn-secondary" onclick="archiveEvent('${event.id}')">ARCHIVE</button>
                 <button class="btn btn-danger" onclick="deleteEvent('${event.id}')">DELETE</button>
             </div>
         `;
@@ -437,6 +470,8 @@ async function createEvent(e) {
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
         options: document.getElementById('event-options').value.split('\n').filter(opt => opt.trim()),
         status: 'active',
+        display_status: 'visible',  // ADD THIS LINE
+        archive_status: 'active',   // ADD THIS LINE
         totalBets: 0,
         totalPot: 0,
         createdAt: firebase.firestore.Timestamp.now()
@@ -465,19 +500,141 @@ async function settleEvent(eventId) {
     const winner = prompt('Enter winning option (exact text):');
     if (!winner) return;
     
+    if (!confirm(`Settle event with "${winner}" as winner? This will process all bets and cannot be undone.`)) return;
+    
     try {
-        await db.collection('events').doc(eventId).update({
-            status: 'completed',
+        showNotification('Settling event and processing bets...');
+        
+        // Get event data
+        const eventDoc = await db.collection('events').doc(eventId).get();
+        const eventData = eventDoc.data();
+        
+        // Get betting pool data
+        const poolDoc = await db.collection('betting_pools').doc(eventId).get();
+        const poolData = poolDoc.exists ? poolDoc.data() : null;
+        
+        if (!poolData) {
+            throw new Error('No betting pool found for this event');
+        }
+        
+        // Calculate winnings
+        const totalPool = poolData.totalPool;
+        const vigAmount = totalPool * (poolData.vigPercentage / 100);
+        const totalAfterVig = totalPool - vigAmount;
+        const winnerPool = poolData.optionPools[winner] || 0;
+        
+        if (winnerPool === 0) {
+            throw new Error('No bets placed on winning option');
+        }
+        
+        const winningMultiplier = totalAfterVig / winnerPool;
+        
+        // Get all betting slips for this event
+        const slipsSnapshot = await db.collection('betting_slips')
+            .where('eventId', '==', eventId)
+            .where('status', '==', 'placed')
+            .get();
+        
+        // Process settlements in batches
+        const batch = db.batch();
+        const userUpdates = {};
+        
+        for (const slipDoc of slipsSnapshot.docs) {
+            const slip = slipDoc.data();
+            const isWinner = slip.selectedOption === winner;
+            
+            let winAmount = 0;
+            let newStatus = '';
+            
+            if (isWinner) {
+                winAmount = slip.betAmount * winningMultiplier;
+                newStatus = 'placed & won';
+            } else {
+                winAmount = 0;
+                newStatus = 'placed & lost';
+            }
+            
+            const netProfit = winAmount - slip.betAmount;
+            
+            // Update betting slip
+            batch.update(slipDoc.ref, {
+                status: newStatus,
+                winAmount: winAmount,
+                netProfit: netProfit,
+                settledAt: firebase.firestore.Timestamp.now()
+            });
+            
+            // Accumulate user balance changes
+            if (!userUpdates[slip.userId]) {
+                userUpdates[slip.userId] = {
+                    balanceChange: 0,
+                    totalWagered: 0,
+                    totalWon: 0,
+                    slips: []
+                };
+            }
+            
+            userUpdates[slip.userId].balanceChange += netProfit;
+            userUpdates[slip.userId].totalWagered += slip.betAmount;
+            userUpdates[slip.userId].totalWon += winAmount;
+            userUpdates[slip.userId].slips.push({
+                option: slip.selectedOption,
+                amount: slip.betAmount,
+                winAmount: winAmount,
+                isWinner: isWinner
+            });
+        }
+        
+        // Update user balances and send notifications
+        for (const [userId, userData] of Object.entries(userUpdates)) {
+            const userDoc = await db.collection('users').doc(userId).get();
+            const user = userDoc.data();
+            
+            const newBalance = user.balance + userData.balanceChange;
+            const newDebt = newBalance < 0 ? Math.abs(newBalance) : 0;
+            const actualBalance = Math.max(0, newBalance); // This is the actual wallet balance
+            
+            // Update user balance
+            batch.update(userDoc.ref, {
+                balance: actualBalance,
+                debt: newDebt,
+                totalWinnings: (user.totalWinnings || 0) + Math.max(0, userData.balanceChange)
+            });
+            
+            // Create notification with CORRECT balance display
+            const netResult = userData.balanceChange;
+            const resultText = netResult > 0 ? `won ${formatCurrency(netResult)}` : `lost ${formatCurrency(Math.abs(netResult))}`;
+            
+            const notifRef = db.collection('notifications').doc();
+            batch.set(notifRef, {
+                userId: userId,
+                title: `Event Settled: ${eventData.title}`,
+                message: `You wagered ${formatCurrency(userData.totalWagered)} and ${resultText}. New balance: ${formatCurrency(actualBalance)}${newDebt > 0 ? ` (Debt: ${formatCurrency(newDebt)})` : ''}`,
+                timestamp: firebase.firestore.Timestamp.now(),
+                read: false,
+                type: 'settlement'
+            });
+}
+        
+        // Update event status
+        const eventRef = db.collection('events').doc(eventId);
+        batch.update(eventRef, {
+            status: 'settled',
             winner: winner,
-            settledAt: firebase.firestore.Timestamp.now()
+            settledAt: firebase.firestore.Timestamp.now(),
+            archive_status: 'active',
+            display_status: 'visible'
         });
         
-        // TODO: Implement bet settlement logic
+        // Commit all changes
+        await batch.commit();
         
-        showNotification('Event settled successfully');
+        showNotification(`Event settled successfully! ${slipsSnapshot.size} bets processed.`);
         loadEventsGrid();
+        
     } catch (error) {
         console.error('Error settling event:', error);
+        showNotification(`Error settling event: ${error.message}`);
     }
 }
 
@@ -492,6 +649,145 @@ async function deleteEvent(eventId) {
         console.error('Error deleting event:', error);
     }
 }
+
+
+function createArchivedEventsTab() {
+    return `
+        <div class="form-group">
+            <button class="btn btn-secondary" onclick="refreshArchivedEvents()">REFRESH</button>
+            <button class="btn btn-secondary" onclick="exportArchivedEvents()">EXPORT ARCHIVED</button>
+        </div>
+        
+        <div class="events-grid" id="archived-events-grid">
+            <div style="text-align: center; grid-column: 1/-1;">Loading archived events...</div>
+        </div>
+    `;
+}
+
+async function loadArchivedEvents() {
+    try {
+        const eventsSnapshot = await db.collection('events')
+            .where('archive_status', '==', 'archived')
+            .orderBy('archivedAt', 'desc')
+            .get();
+        const archivedEvents = eventsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        displayArchivedEvents(archivedEvents);
+    } catch (error) {
+        console.error('Error loading archived events:', error);
+    }
+}
+
+function displayArchivedEvents(archivedEvents) {
+    const grid = document.getElementById('archived-events-grid');
+    grid.innerHTML = '';
+    
+    if (archivedEvents.length === 0) {
+        grid.innerHTML = '<div style="text-align: center; grid-column: 1/-1;">No archived events found.</div>';
+        return;
+    }
+    
+    archivedEvents.forEach(event => {
+        const card = document.createElement('div');
+        card.className = 'event-card archived';
+        
+        const startTime = event.startTime ? new Date(event.startTime.seconds * 1000).toLocaleString() : 'TBD';
+        const archivedTime = event.archivedAt ? new Date(event.archivedAt.seconds * 1000).toLocaleString() : 'Unknown';
+        
+        card.innerHTML = `
+            <h3>${event.title}</h3>
+            <p><strong>Start:</strong> ${startTime}</p>
+            <p><strong>Archived:</strong> ${archivedTime}</p>
+            <p><strong>Status:</strong> <span class="event-status ${event.status}">${event.status.toUpperCase()}</span></p>
+            <p><strong>Winner:</strong> ${event.winner || 'N/A'}</p>
+            <p><strong>Total Bets:</strong> ${event.totalBets || 0}</p>
+            <p><strong>Total Pot:</strong> ₹${event.totalPot || 0}</p>
+            <div class="user-actions">
+                <button class="btn btn-info" onclick="unarchiveEvent('${event.id}')">UNARCHIVE</button>
+                <button class="btn btn-danger" onclick="permanentlyDeleteEvent('${event.id}')">PERMANENT DELETE</button>
+            </div>
+        `;
+        
+        grid.appendChild(card);
+    });
+}
+
+async function unarchiveEvent(eventId) {
+    if (!confirm('Unarchive this event? It will appear in active events again.')) return;
+    
+    try {
+        await db.collection('events').doc(eventId).update({
+            archive_status: 'active',
+            display_status: 'visible'
+        });
+        
+        showNotification('Event unarchived successfully');
+        loadArchivedEvents();
+    } catch (error) {
+        console.error('Error unarchiving event:', error);
+    }
+}
+
+async function permanentlyDeleteEvent(eventId) {
+    if (!confirm('PERMANENTLY DELETE this event? This cannot be undone!')) return;
+    if (!confirm('Are you absolutely sure? All data will be lost forever!')) return;
+    
+    try {
+        await db.collection('events').doc(eventId).delete();
+        showNotification('Event permanently deleted');
+        loadArchivedEvents();
+    } catch (error) {
+        console.error('Error permanently deleting event:', error);
+    }
+}
+
+function refreshArchivedEvents() {
+    loadArchivedEvents();
+    showNotification('Archived events refreshed');
+}
+
+async function hideEvent(eventId) {
+    try {
+        await db.collection('events').doc(eventId).update({
+            display_status: 'hidden'
+        });
+        
+        showNotification('Event hidden from homepage');
+        loadEventsGrid();
+    } catch (error) {
+        console.error('Error hiding event:', error);
+    }
+}
+
+async function showEvent(eventId) {
+    try {
+        await db.collection('events').doc(eventId).update({
+            display_status: 'visible'
+        });
+        
+        showNotification('Event shown on homepage');
+        loadEventsGrid();
+    } catch (error) {
+        console.error('Error showing event:', error);
+    }
+}
+
+async function archiveEvent(eventId) {
+    if (!confirm('Archive this event? It will be moved to archived events.')) return;
+    
+    try {
+        await db.collection('events').doc(eventId).update({
+            archive_status: 'archived',
+            display_status: 'hidden',
+            archivedAt: firebase.firestore.Timestamp.now()
+        });
+        
+        showNotification('Event archived successfully');
+        loadEventsGrid();
+    } catch (error) {
+        console.error('Error archiving event:', error);
+    }
+}
+
 
 // Settings Tab
 function createSettingsTab() {
@@ -688,18 +984,43 @@ function loadUsersList() {
 // Analytics Tab
 function createAnalyticsTab() {
     return `
+        <div class="analytics-controls">
+            <div class="form-group">
+                <label for="analytics-period">Time Period:</label>
+                <select id="analytics-period" onchange="loadAnalyticsData()">
+                    <option value="daily">Today</option>
+                    <option value="weekly">This Week</option>
+                    <option value="monthly">This Month</option>
+                    <option value="all">All Time</option>
+                </select>
+                <button class="btn btn-secondary" onclick="exportAnalytics()">EXPORT ANALYTICS</button>
+            </div>
+        </div>
+
         <div class="stats-grid" id="analytics-stats">
             <div class="stat-card">
-                <div class="stat-value" id="daily-signups">0</div>
-                <div class="stat-label">Daily Signups</div>
+                <div class="stat-value" id="period-signups">0</div>
+                <div class="stat-label" id="signups-label">Signups</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="daily-bets">0</div>
-                <div class="stat-label">Daily Bets</div>
+                <div class="stat-value" id="period-bets">0</div>
+                <div class="stat-label" id="bets-label">Bets Placed</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value" id="daily-revenue">₹0</div>
-                <div class="stat-label">Daily Revenue</div>
+                <div class="stat-value" id="period-ads-viewed">0</div>
+                <div class="stat-label" id="ads-viewed-label">Ads Viewed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="period-ads-clicked">0</div>
+                <div class="stat-label" id="ads-clicked-label">Ads Clicked</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="period-buyins">₹0</div>
+                <div class="stat-label" id="buyins-label">Buy-ins</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="period-wagered">₹0</div>
+                <div class="stat-label" id="wagered-label">Money Wagered</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="conversion-rate">0%</div>
@@ -707,42 +1028,428 @@ function createAnalyticsTab() {
             </div>
         </div>
         
-        <h3>User Activity Heatmap</h3>
-        <div class="logs-container" id="activity-analytics">
-            Loading analytics data...
+        <div class="charts-container">
+            <div class="chart-row">
+                <div class="chart-section">
+                    <h3>Activity Overview</h3>
+                    <canvas id="activityChart" width="400" height="200"></canvas>
+                </div>
+                <div class="chart-section">
+                    <h3>Revenue Breakdown</h3>
+                    <canvas id="revenueChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-row">
+                <div class="chart-section">
+                    <h3>User Engagement Trends</h3>
+                    <canvas id="engagementChart" width="800" height="300"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-row">
+                <div class="chart-section">
+                    <h3>Top User Activities</h3>
+                    <canvas id="userActivitiesChart" width="400" height="200"></canvas>
+                </div>
+                <div class="chart-section">
+                    <h3>Platform Health</h3>
+                    <canvas id="healthChart" width="400" height="200"></canvas>
+                </div>
+            </div>
         </div>
     `;
 }
 
+let analyticsCharts = {};
+
 async function loadAnalyticsData() {
     try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayTimestamp = firebase.firestore.Timestamp.fromDate(today);
+        const period = document.getElementById('analytics-period')?.value || 'daily';
+        const { startDate, endDate } = getDateRange(period);
         
-        // Daily signups
-        const dailySignups = await db.collection('users')
-            .where('registrationDate', '>=', todayTimestamp)
-            .get();
-        document.getElementById('daily-signups').textContent = dailySignups.size;
+        // Update labels based on period
+        updatePeriodLabels(period);
         
-        // Daily activity
-        const dailyActivity = await db.collection('activity_logs')
-            .where('timestamp', '>=', todayTimestamp)
-            .get();
-            
-        const bets = dailyActivity.docs.filter(doc => doc.data().action === 'bet_placed');
-        document.getElementById('daily-bets').textContent = bets.length;
+        // Load all analytics data
+        const [
+            signupsData,
+            betsData, 
+            adsData,      // This now returns {views, clicks}
+            buyinsData,
+            activityData,
+            usersData
+        ] = await Promise.all([
+            getSignupsData(startDate, endDate),
+            getBetsData(startDate, endDate),
+            getAdsData(startDate, endDate),    // Updated function
+            getBuyinsData(startDate, endDate),
+            getActivityData(startDate, endDate),
+            getUsersData()
+        ]);
         
-        // KYC Conversion rate
-        const totalUsers = users.length;
-        const approvedUsers = users.filter(u => u.kycStatus === 'approved').length;
-        const conversionRate = totalUsers > 0 ? ((approvedUsers / totalUsers) * 100).toFixed(1) : 0;
-        document.getElementById('conversion-rate').textContent = conversionRate + '%';
+        // Update stat cards
+        updateStatCards(signupsData, betsData, adsData, buyinsData, usersData);
+        
+        // Create/update charts
+        createCharts(period, activityData, buyinsData, betsData, adsData, usersData);
         
     } catch (error) {
         console.error('Error loading analytics:', error);
+        showNotification('Error loading analytics data');
     }
+}
+
+function getDateRange(period) {
+    const now = new Date();
+    let startDate, endDate = new Date();
+    
+    switch(period) {
+        case 'daily':
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            break;
+        case 'weekly':
+            startDate = new Date(now);
+            startDate.setDate(now.getDate() - 7);
+            break;
+        case 'monthly':
+            startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+            break;
+        case 'all':
+        default:
+            startDate = new Date(2020, 0, 1); // Far back date
+            break;
+    }
+    
+    return { 
+        startDate: firebase.firestore.Timestamp.fromDate(startDate), 
+        endDate: firebase.firestore.Timestamp.fromDate(endDate) 
+    };
+}
+
+function updatePeriodLabels(period) {
+    const labels = {
+        daily: 'Today',
+        weekly: 'This Week', 
+        monthly: 'This Month',
+        all: 'All Time'
+    };
+    
+    const suffix = labels[period];
+    document.getElementById('signups-label').textContent = `Signups (${suffix})`;
+    document.getElementById('bets-label').textContent = `Bets (${suffix})`;
+    document.getElementById('ads-viewed-label').textContent = `Ads Viewed (${suffix})`;
+    document.getElementById('ads-clicked-label').textContent = `Ads Clicked (${suffix})`;
+    document.getElementById('buyins-label').textContent = `Buy-ins (${suffix})`;
+    document.getElementById('wagered-label').textContent = `Wagered (${suffix})`;
+}
+
+async function getSignupsData(startDate, endDate) {
+    const snapshot = await db.collection('users')
+        .where('registrationDate', '>=', startDate)
+        .where('registrationDate', '<=', endDate)
+        .get();
+    return snapshot.size;
+}
+
+async function getBetsData(startDate, endDate) {
+    const snapshot = await db.collection('activity_logs')
+        .where('action', '==', 'bet_placed')
+        .where('timestamp', '>=', startDate)
+        .where('timestamp', '<=', endDate)
+        .get();
+    
+    let totalWagered = 0;
+    snapshot.docs.forEach(doc => {
+        const amount = doc.data().data?.amount || 0;
+        totalWagered += amount;
+    });
+    
+    return { count: snapshot.size, totalWagered };
+}
+
+async function getAdsData(startDate, endDate) {
+    const [viewsSnapshot, clicksSnapshot] = await Promise.all([
+        db.collection('activity_logs')
+            .where('action', '==', 'ad_view')
+            .where('timestamp', '>=', startDate)
+            .where('timestamp', '<=', endDate)
+            .get(),
+        db.collection('activity_logs')
+            .where('action', '==', 'ad_click')
+            .where('timestamp', '>=', startDate)
+            .where('timestamp', '<=', endDate)
+            .get()
+    ]);
+    
+    return { 
+        views: viewsSnapshot.size, 
+        clicks: clicksSnapshot.size 
+    };
+}
+
+async function getBuyinsData(startDate, endDate) {
+    const snapshot = await db.collection('activity_logs')
+        .where('action', '==', 'buyin')
+        .where('timestamp', '>=', startDate)
+        .where('timestamp', '<=', endDate)
+        .get();
+        
+    let totalBuyins = 0;
+    snapshot.docs.forEach(doc => {
+        const amount = doc.data().data?.amount || 0;
+        totalBuyins += amount;
+    });
+    
+    return { count: snapshot.size, totalAmount: totalBuyins };
+}
+
+async function getActivityData(startDate, endDate) {
+    const snapshot = await db.collection('activity_logs')
+        .where('timestamp', '>=', startDate)
+        .where('timestamp', '<=', endDate)
+        .orderBy('timestamp', 'desc')
+        .get();
+        
+    const activities = {};
+    const dailyActivity = {};
+    
+    snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        const action = data.action;
+        const date = data.timestamp.toDate().toDateString();
+        
+        // Count by action type
+        activities[action] = (activities[action] || 0) + 1;
+        
+        // Count by date
+        if (!dailyActivity[date]) dailyActivity[date] = 0;
+        dailyActivity[date]++;
+    });
+    
+    return { activities, dailyActivity, total: snapshot.size };
+}
+
+async function getUsersData() {
+    const snapshot = await db.collection('users').get();
+    const users = snapshot.docs.map(doc => doc.data());
+    
+    const approved = users.filter(u => u.kycStatus === 'approved').length;
+    const pending = users.filter(u => u.kycStatus === 'pending').length;
+    const debt = users.filter(u => u.debt > 0).length;
+    
+    return { total: users.length, approved, pending, debt };
+}
+
+function updateStatCards(signups, bets, ads, buyins, usersData) {
+    document.getElementById('period-signups').textContent = signups;
+    document.getElementById('period-bets').textContent = bets.count;
+    document.getElementById('period-ads-viewed').textContent = ads.views;
+    document.getElementById('period-ads-clicked').textContent = ads.clicks;
+    document.getElementById('period-buyins').textContent = formatCurrency(buyins.totalAmount);
+    document.getElementById('period-wagered').textContent = formatCurrency(bets.totalWagered);
+    
+    const conversionRate = usersData.total > 0 ? 
+        ((usersData.approved / usersData.total) * 100).toFixed(1) : 0;
+    document.getElementById('conversion-rate').textContent = conversionRate + '%';
+}
+
+function createCharts(period, activityData, buyinsData, betsData, adsData, usersData) {
+    // Destroy existing charts
+    Object.values(analyticsCharts).forEach(chart => {
+        if (chart) chart.destroy();
+    });
+    analyticsCharts = {};
+    
+    // Activity Overview Chart
+    const activityCtx = document.getElementById('activityChart')?.getContext('2d');
+    if (activityCtx) {
+        analyticsCharts.activity = new Chart(activityCtx, {
+            type: 'doughnut',
+            data: {
+                labels: Object.keys(activityData.activities),
+                datasets: [{
+                    data: Object.values(activityData.activities),
+                    backgroundColor: [
+                        '#9ef01a', '#ff0a54', '#ffa500', '#00d4ff', 
+                        '#ff6b9d', '#a78bfa', '#10b981', '#f59e0b'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { 
+                        labels: { color: '#FFF3DA' }
+                    }
+                }
+            }
+        });
+    }
+    
+    // Revenue Chart - UPDATE this section
+    const revenueCtx = document.getElementById('revenueChart')?.getContext('2d');
+    if (revenueCtx) {
+        analyticsCharts.revenue = new Chart(revenueCtx, {
+            type: 'pie',
+            data: {
+                labels: ['Buy-ins', 'Ad Revenue (Completed)', 'Betting Fees'],
+                datasets: [{
+                    data: [
+                        buyinsData.totalAmount,
+                        adsData.views * settings.perAdReward, // Only count completed views for revenue
+                        betsData.totalWagered * (settings.vigPercentage / 100)
+                    ],
+                    backgroundColor: ['#9ef01a', '#ffa500', '#ff0a54']
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { 
+                        labels: { color: '#FFF3DA' }
+                    }
+                }
+            }
+        });
+    }
+    
+    // Engagement Trends - REPLACE the existing engagement chart code
+    const engagementCtx = document.getElementById('engagementChart')?.getContext('2d');
+    if (engagementCtx && Object.keys(activityData.dailyActivity).length > 0) {
+        const dates = Object.keys(activityData.dailyActivity).sort();
+        
+        // Fill in missing dates to ensure consecutive display
+        const startDate = new Date(dates[0]);
+        const endDate = new Date(dates[dates.length - 1]);
+        const allDates = [];
+        const allCounts = [];
+        
+        for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+            const dateString = d.toDateString();
+            allDates.push(d.toLocaleDateString());
+            allCounts.push(activityData.dailyActivity[dateString] || 0);
+        }
+        
+        analyticsCharts.engagement = new Chart(engagementCtx, {
+            type: 'line',
+            data: {
+                labels: allDates,
+                datasets: [{
+                    label: 'Daily Activity',
+                    data: allCounts,
+                    borderColor: '#9ef01a',
+                    backgroundColor: 'rgba(158, 240, 26, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { 
+                        ticks: { color: '#FFF3DA' },
+                        grid: { color: '#333' },
+                        beginAtZero: true
+                    },
+                    x: { 
+                        ticks: { color: '#FFF3DA' },
+                        grid: { color: '#333' }
+                    }
+                },
+                plugins: {
+                    legend: { 
+                        labels: { color: '#FFF3DA' }
+                    }
+                }
+            }
+        });
+    }
+    
+    // User Activities Bar Chart
+    const userActivitiesCtx = document.getElementById('userActivitiesChart')?.getContext('2d');
+    if (userActivitiesCtx) {
+        const topActivities = Object.entries(activityData.activities)
+            .sort(([,a], [,b]) => b - a)
+            .slice(0, 6);
+            
+        analyticsCharts.userActivities = new Chart(userActivitiesCtx, {
+            type: 'bar',
+            data: {
+                labels: topActivities.map(([action]) => action.replace('_', ' ')),
+                datasets: [{
+                    label: 'Count',
+                    data: topActivities.map(([, count]) => count),
+                    backgroundColor: '#9ef01a',
+                    borderColor: '#7bc908',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: { 
+                        ticks: { color: '#FFF3DA' },
+                        grid: { color: '#333' }
+                    },
+                    x: { 
+                        ticks: { color: '#FFF3DA' },
+                        grid: { color: '#333' }
+                    }
+                },
+                plugins: {
+                    legend: { 
+                        labels: { color: '#FFF3DA' }
+                    }
+                }
+            }
+        });
+    }
+    
+    // Platform Health
+    const healthCtx = document.getElementById('healthChart')?.getContext('2d');
+    if (healthCtx) {
+        analyticsCharts.health = new Chart(healthCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Approved KYC', 'Pending KYC', 'Users with Debt'],
+                datasets: [{
+                    data: [usersData.approved, usersData.pending, usersData.debt],
+                    backgroundColor: ['#9ef01a', '#ffa500', '#ff0a54']
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { 
+                        labels: { color: '#FFF3DA' }
+                    }
+                }
+            }
+        });
+    }
+}
+
+function exportAnalytics() {
+    const period = document.getElementById('analytics-period').value;
+    const data = {
+        period: period,
+        signups: document.getElementById('period-signups').textContent,
+        bets: document.getElementById('period-bets').textContent,
+        ads: document.getElementById('period-ads').textContent,
+        buyins: document.getElementById('period-buyins').textContent,
+        wagered: document.getElementById('period-wagered').textContent,
+        conversion: document.getElementById('conversion-rate').textContent,
+        exportDate: new Date().toISOString()
+    };
+    
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
+    const link = document.createElement("a");
+    link.setAttribute("href", dataStr);
+    link.setAttribute("download", `predictking-analytics-${period}-${new Date().toISOString().split('T')[0]}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 }
 
 function createInboxTab() {
