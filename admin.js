@@ -46,6 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Set up form listeners
     document.getElementById('create-event-form').addEventListener('submit', createEvent);
+    document.getElementById('edit-event-form').addEventListener('submit', updateEvent);
     document.getElementById('send-message-form').addEventListener('submit', sendMessage);
     document.getElementById('message-type').addEventListener('change', handleMessageTypeChange);
     
@@ -253,11 +254,11 @@ function displayUsersTable() {
     users.forEach(user => {
         const row = document.createElement('tr');
         
-        // Calculate actual balance (positive or negative)
-        const actualBalance = user.balance - (user.debt || 0);
-        const balanceClass = actualBalance < 0 ? 'debt-amount' : '';
-        const balanceDisplay = `<span class="${balanceClass}">${formatCurrency(actualBalance, user.currency)}</span>`;
-            
+        // Calculate wallet balance (balance - debt)
+        const walletBalance = user.balance - (user.debt || 0);
+        const balanceClass = walletBalance < 0 ? 'debt-amount' : '';
+        const balanceDisplay = `<span class="${balanceClass}" style="color: ${walletBalance < 0 ? '#ffc857' : '#9ef01a'};">${formatCurrency(walletBalance, user.currency)}</span>`;
+                    
         row.innerHTML = `
             <td>${user.nickname}</td>
             <td>${user.displayName}</td>
@@ -370,9 +371,26 @@ function adjustBalance(userId) {
 
 async function updateUserBalance(userId, newBalance) {
     try {
+        // When admin sets balance directly, we need to adjust balance and debt properly
+        // If newBalance is negative, set debt to 0 and balance to the negative value
+        // If newBalance is positive, set debt to 0 and balance to the positive value
+        // The wallet balance (balance - debt) should equal what admin entered
+        
+        let actualBalance, actualDebt;
+        
+        if (newBalance < 0) {
+            // For negative wallet balance: set balance to 0 and debt to absolute value
+            actualBalance = 0;
+            actualDebt = Math.abs(newBalance);
+        } else {
+            // For positive wallet balance: set balance to the value and debt to 0
+            actualBalance = newBalance;
+            actualDebt = 0;
+        }
+        
         await db.collection('users').doc(userId).update({
-            balance: newBalance,
-            debt: newBalance < 0 ? Math.abs(newBalance) : 0
+            balance: actualBalance,
+            debt: actualDebt
         });
         
         showNotification('Balance updated successfully');
@@ -410,8 +428,15 @@ function createEventsTab() {
 
 async function loadEventsGrid() {
     try {
+        // Force fresh data fetch
         const eventsSnapshot = await db.collection('events').orderBy('startTime', 'desc').get();
-        events = eventsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Get fresh event data each time
+        events = [];
+        for (const doc of eventsSnapshot.docs) {
+            const freshDoc = await db.collection('events').doc(doc.id).get();
+            events.push({ id: doc.id, ...freshDoc.data() });
+        }
+        console.log('Loaded fresh events data:', events);
         displayEventsGrid();
     } catch (error) {
         console.error('Error loading events:', error);
@@ -435,16 +460,28 @@ async function displayEventsGrid() {
         const voteCounts = await getEventVoteCounts(event.id);
         const voteCountsHtml = generateVoteCountsHtml(voteCounts);
         
+        // Get settlement data if event is settled
+        const settlementData = await getEventSettlement(event.id);
+        const settlementHtml = generateSettlementHtml(settlementData);
+        
+        // Get current odds from betting pool
+        // Get both initial and current odds
+        const oddsHtml = await generateOddsHtml(event.id, event);
+        
         card.innerHTML = `
             <h3>${event.title}</h3>
+            <p><strong>Sport:</strong> <span style="color: #ffa500; font-weight: bold;">${event.sportType || 'Not Set'}</span></p>
             <p><strong>Start:</strong> ${startTime}</p>
             <p><strong>Status:</strong> <span class="event-status ${event.status}">${event.status.toUpperCase()}</span></p>
             <p><strong>Display:</strong> <span class="event-status ${event.display_status || 'visible'}">${(event.display_status || 'visible').toUpperCase()}</span></p>
             <p><strong>Total Bets:</strong> ${event.totalBets || 0}</p>
             <p><strong>Total Pot:</strong> ₹${event.totalPot || 0}</p>
             ${voteCountsHtml}
+            ${oddsHtml}
+            ${settlementHtml}
             <div class="user-actions">
                 <button class="btn btn-secondary" onclick="editEvent('${event.id}')">EDIT</button>
+                <button class="btn btn-info" onclick="refreshEventOdds('${event.id}')">REFRESH ODDS</button>
                 ${event.status === 'active' ? `<button class="btn btn-warning" onclick="settleEvent('${event.id}')">SETTLE</button>` : ''}
                 ${event.display_status !== 'hidden' ? `<button class="btn btn-info" onclick="hideEvent('${event.id}')">HIDE</button>` : `<button class="btn btn-info" onclick="showEvent('${event.id}')">SHOW</button>`}
                 <button class="btn btn-secondary" onclick="archiveEvent('${event.id}')">ARCHIVE</button>
@@ -455,7 +492,6 @@ async function displayEventsGrid() {
         grid.appendChild(card);
     }
 }
-
 
 // Get vote counts for a specific event
 async function getEventVoteCounts(eventId) {
@@ -492,6 +528,168 @@ function generateVoteCountsHtml(voteCounts) {
     return `<p><strong>Votes:</strong> ${voteItems}</p>`;
 }
 
+// Get settlement data for a specific event
+async function getEventSettlement(eventId) {
+    try {
+        const settlementSnapshot = await db.collection('event_settlements')
+            .where('eventId', '==', eventId)
+            .limit(1)
+            .get();
+        
+        if (!settlementSnapshot.empty) {
+            return settlementSnapshot.docs[0].data();
+        }
+        return null;
+    } catch (error) {
+        console.error('Error getting settlement data:', error);
+        return null;
+    }
+}
+
+// Generate HTML for displaying settlement data
+function generateSettlementHtml(settlementData) {
+    if (!settlementData) {
+        return '';
+    }
+    
+    const settledTime = settlementData.settledAt ? 
+        new Date(settlementData.settledAt.seconds * 1000).toLocaleString() : 'Unknown';
+    
+    let vigStatsHtml = '';
+    if (settlementData.vigStats) {
+        const stats = settlementData.vigStats;
+        const statusColor = stats.isHealthy ? '#9ef01a' : '#ff0a54';
+        const actualVig = stats.actualVig || stats.profitLoss;
+        const profitLossText = actualVig >= 0 ? `+₹${Math.floor(actualVig)}` : `₹${Math.floor(actualVig)}`;
+        
+        vigStatsHtml = `
+            <p><strong>Algorithm Health:</strong> 
+                <span style="color: ${statusColor}; font-weight: bold;">
+                    ${stats.healthStatus.toUpperCase()}, ${profitLossText}
+                </span>
+            </p>
+            <p><strong>Expected Vig:</strong> ₹${Math.floor(stats.expectedVig)} | <strong>Actual Vig:</strong> ₹${Math.floor(actualVig)}</p>
+        `;
+    }
+    
+    return `
+        <div class="settlement-info" style="background: rgba(158, 240, 26, 0.1); padding: 8px; border-radius: 4px; margin: 8px 0;">
+            <h4 style="margin: 0 0 4px 0; color: #9ef01a;">Settlement Details</h4>
+            <p><strong>Winner:</strong> ${settlementData.winner}</p>
+            <p><strong>Settled:</strong> ${settledTime}</p>
+            <p><strong>Total Bets Settled:</strong> ${settlementData.totalBetsSettled}</p>
+            <p><strong>Winners Won:</strong> ₹${Math.floor(settlementData.winnersWin || 0)}</p>
+            <p><strong>Losers Lost:</strong> ₹${Math.floor(settlementData.losersLose || 0)}</p>
+            <p><strong>My Vig:</strong> ₹${Math.floor(settlementData.myVig)} (${settlementData.vigPercentage}%)</p>
+            ${vigStatsHtml}
+        </div>
+    `;
+}
+
+// Generate HTML for displaying current odds
+// Generate HTML for displaying both initial and current odds
+async function generateOddsHtml(eventId, event) {
+    try {
+        const initialOdds = event.initialOdds || {};
+        let currentOdds = event.currentOdds || {};
+        
+        // Debug logging
+        console.log(`Event ${eventId} - Initial Odds:`, initialOdds);
+        console.log(`Event ${eventId} - Current Odds from event:`, currentOdds);
+        
+        // Try to get most up-to-date current odds from betting pool
+        try {
+            const poolDoc = await db.collection('betting_pools').doc(eventId).get();
+            if (poolDoc.exists) {
+                const poolData = poolDoc.data();
+                if (poolData.currentOdds) {
+                    currentOdds = poolData.currentOdds;
+                    console.log(`Event ${eventId} - Current Odds from betting pool:`, currentOdds);
+                }
+            }
+        } catch (poolError) {
+            console.log('No betting pool found, using event currentOdds');
+        }
+        
+        // Also try to fetch fresh event data directly
+        try {
+            const eventDoc = await db.collection('events').doc(eventId).get();
+            if (eventDoc.exists) {
+                const freshEventData = eventDoc.data();
+                if (freshEventData.currentOdds) {
+                    currentOdds = freshEventData.currentOdds;
+                    console.log(`Event ${eventId} - Fresh Current Odds from events collection:`, currentOdds);
+                }
+            }
+        } catch (fetchError) {
+            console.log('Error fetching fresh event data:', fetchError);
+        }
+        
+        let oddsHtml = '';
+        
+        // Get the order from initial odds to maintain consistency
+        const teamOrder = Object.keys(initialOdds);
+        
+        // Display Initial Odds
+        if (Object.keys(initialOdds).length > 0) {
+            const initialOddsItems = teamOrder
+                .map(team => `${team}: ${parseFloat(initialOdds[team]).toFixed(2)}x`)
+                .join(', ');
+            oddsHtml += `<p><strong>Initial Odds:</strong> ${initialOddsItems}</p>`;
+        }
+        
+        // Display Current Odds
+        if (Object.keys(currentOdds).length > 0) {
+            const currentOddsItems = teamOrder
+                .map(team => {
+                    const odds = currentOdds[team];
+                    return odds ? `${team}: ${parseFloat(odds).toFixed(2)}x` : `${team}: N/A`;
+                })
+                .join(', ');
+            
+            oddsHtml += `<p><strong>Current Odds:</strong> ${currentOddsItems}</p>`;
+        } else {
+            oddsHtml += `<p><strong>Current Odds:</strong> <span style="color: #ffa500;">No current odds found</span></p>`;
+        }
+        
+        if (oddsHtml === '') {
+            return '<p><strong>Odds:</strong> Not set</p>';
+        }
+        
+        return oddsHtml;
+    } catch (error) {
+        console.error('Error getting odds:', error);
+        return '<p><strong>Odds:</strong> Error loading</p>';
+    }
+}
+
+function generateOddsInputs() {
+    const optionsText = document.getElementById('event-options').value;
+    const options = optionsText.split('\n').filter(opt => opt.trim());
+    const oddsContainer = document.getElementById('odds-container');
+    const oddsInputsDiv = document.getElementById('odds-inputs');
+    
+    if (options.length < 2) {
+        oddsContainer.style.display = 'none';
+        return;
+    }
+    
+    oddsContainer.style.display = 'block';
+    oddsInputsDiv.innerHTML = '';
+    
+    options.forEach((option, index) => {
+        const inputGroup = document.createElement('div');
+        inputGroup.className = 'form-row';
+        inputGroup.innerHTML = `
+            <div class="form-group" style="flex: 1;">
+                <label for="odds-${index}">${option.trim()} - Initial Odds</label>
+                <input type="number" id="odds-${index}" min="1.01" max="50" step="0.01" value="2.00" required>
+            </div>
+        `;
+        oddsInputsDiv.appendChild(inputGroup);
+    });
+}
+
 // Replace the entire createEvent function with:
 async function createEvent(e) {
     e.preventDefault();
@@ -502,38 +700,142 @@ async function createEvent(e) {
         return;
     }
     
+    const options = document.getElementById('event-options').value.split('\n').filter(opt => opt.trim());
+    
+    if (options.length < 2) {
+        showNotification('Please add at least 2 betting options');
+        return;
+    }
+    
+    // Collect initial odds for each option
+    const initialOdds = {};
+    let hasValidOdds = true;
+    
+    options.forEach((option, index) => {
+        const oddsInput = document.getElementById(`odds-${index}`);
+        const oddsValue = parseFloat(oddsInput.value);
+        
+        if (isNaN(oddsValue) || oddsValue < 1.01) {
+            hasValidOdds = false;
+            return;
+        }
+        
+        initialOdds[option.trim()] = oddsValue;
+    });
+    
+    if (!hasValidOdds) {
+        showNotification('Please enter valid odds (minimum 1.01) for all options');
+        return;
+    }
+    
     const eventData = {
         title: document.getElementById('event-title').value,
         description: document.getElementById('event-description').value || '',
+        sportType: document.getElementById('event-sport-type').value.trim(),
         profilePic: document.getElementById('event-profile-pic').value,
         backgroundImage: document.getElementById('event-background').value || '',
         startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
-        options: document.getElementById('event-options').value.split('\n').filter(opt => opt.trim()),
+        options: options,
+        initialOdds: initialOdds,
+        currentOdds: {...initialOdds}, // Copy initial odds as current odds
         status: 'active',
-        display_status: 'visible',  // ADD THIS LINE
-        archive_status: 'active',   // ADD THIS LINE
+        display_status: 'visible',
+        archive_status: 'active',
         totalBets: 0,
         totalPot: 0,
         createdAt: firebase.firestore.Timestamp.now()
     };
     
-    if (eventData.options.length < 2) {
-        showNotification('Please add at least 2 betting options');
-        return;
-    }
-    
     try {
-        await db.collection('events').add(eventData);
+        const eventRef = await db.collection('events').add(eventData);
+        
+        // Initialize betting pool with initial odds
+        await db.collection('betting_pools').doc(eventRef.id).set({
+            eventId: eventRef.id,
+            totalPool: 0,
+            vigPercentage: eventData.vigPercentage,
+            optionPools: options.reduce((acc, option) => {
+                acc[option.trim()] = 0;
+                return acc;
+            }, {}),
+            currentOdds: {...initialOdds},
+            initialOdds: {...initialOdds},
+            lastUpdated: firebase.firestore.Timestamp.now()
+        });
+        
         closeModal('create-event-modal');
-        showNotification('Event created successfully');
+        showNotification('Event created successfully with initial odds');
         loadEventsGrid();
         
         // Reset form
         document.getElementById('create-event-form').reset();
+        document.getElementById('odds-container').style.display = 'none';
     } catch (error) {
         console.error('Error creating event:', error);
         showNotification('Error creating event');
+    }
+}
+
+function editEvent(eventId) {
+    const event = events.find(e => e.id === eventId);
+    if (!event) {
+        showNotification('Event not found');
+        return;
+    }
+    
+    // Populate the edit form with current event data
+    document.getElementById('edit-event-id').value = eventId;
+    document.getElementById('edit-event-title').value = event.title || '';
+    document.getElementById('edit-event-description').value = event.description || '';
+    document.getElementById('edit-event-sport-type').value = event.sportType || '';
+    document.getElementById('edit-event-profile-pic').value = event.profilePic || '';
+    document.getElementById('edit-event-background').value = event.backgroundImage || '';
+    document.getElementById('edit-event-vig').value = event.vigPercentage || 5;
+    document.getElementById('edit-event-status').value = event.status || 'active';
+    
+    // Convert timestamp to datetime-local format
+    if (event.startTime) {
+        const date = event.startTime.toDate();
+        const localDateTime = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        document.getElementById('edit-event-start').value = localDateTime;
+    }
+    
+    showModal('edit-event-modal');
+}
+
+async function updateEvent(e) {
+    e.preventDefault();
+    
+    const eventId = document.getElementById('edit-event-id').value;
+    const startTimeInput = document.getElementById('edit-event-start').value;
+    
+    if (!startTimeInput) {
+        showNotification('Please select start time');
+        return;
+    }
+    
+    const updatedData = {
+        title: document.getElementById('edit-event-title').value,
+        description: document.getElementById('edit-event-description').value || '',
+        sportType: document.getElementById('edit-event-sport-type').value.trim(),
+        profilePic: document.getElementById('edit-event-profile-pic').value,
+        backgroundImage: document.getElementById('edit-event-background').value || '',
+        startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
+        vigPercentage: parseInt(document.getElementById('edit-event-vig').value) || 5,
+        status: document.getElementById('edit-event-status').value.toLowerCase().trim(),
+        updatedAt: firebase.firestore.Timestamp.now()
+    };
+    
+    try {
+        await db.collection('events').doc(eventId).update(updatedData);
+        
+        closeModal('edit-event-modal');
+        showNotification('Event updated successfully');
+        loadEventsGrid();
+    } catch (error) {
+        console.error('Error updating event:', error);
+        showNotification('Error updating event');
     }
 }
 
@@ -558,17 +860,8 @@ async function settleEvent(eventId) {
             throw new Error('No betting pool found for this event');
         }
         
-        // Calculate winnings
-        const totalPool = poolData.totalPool;
-        const vigAmount = totalPool * (poolData.vigPercentage / 100);
-        const totalAfterVig = totalPool - vigAmount;
-        const winnerPool = poolData.optionPools[winner] || 0;
-        
-        if (winnerPool === 0) {
-            throw new Error('No bets placed on winning option');
-        }
-        
-        const winningMultiplier = totalAfterVig / winnerPool;
+        const totalPool = poolData.totalPool || 0;
+        const vigPercentage = poolData.vigPercentage || 5;
         
         // Get all betting slips for this event
         const slipsSnapshot = await db.collection('betting_slips')
@@ -580,47 +873,53 @@ async function settleEvent(eventId) {
         const batch = db.batch();
         const userUpdates = {};
         
+        let winnersWin = 0;
+        let losersLose = 0;
+        let totalBetsSettled = 0;
+        
         for (const slipDoc of slipsSnapshot.docs) {
             const slip = slipDoc.data();
             const isWinner = slip.selectedOption === winner;
+            totalBetsSettled++;
             
             let winAmount = 0;
             let newStatus = '';
             
             if (isWinner) {
-                winAmount = slip.betAmount * winningMultiplier;
+                // Winner gets payout based on their LOCKED ODDS
+                winAmount = Math.floor(slip.potentialWinning || (slip.betAmount * (slip.odds || 2.0)));
                 newStatus = 'placed & won';
+                winnersWin += winAmount;
             } else {
+                // Loser loses their bet amount
                 winAmount = 0;
                 newStatus = 'placed & lost';
+                losersLose += (slip.betAmount || 0);
             }
-            
-            const netProfit = winAmount - slip.betAmount;
             
             // Update betting slip
             batch.update(slipDoc.ref, {
                 status: newStatus,
-                winAmount: winAmount,
-                netProfit: netProfit,
+                actualWinning: winAmount,
                 settledAt: firebase.firestore.Timestamp.now()
             });
             
             // Accumulate user balance changes
             if (!userUpdates[slip.userId]) {
                 userUpdates[slip.userId] = {
-                    balanceChange: 0,
+                    balanceToAdd: 0,
                     totalWagered: 0,
                     totalWon: 0,
                     slips: []
                 };
             }
             
-            userUpdates[slip.userId].balanceChange += netProfit;
-            userUpdates[slip.userId].totalWagered += slip.betAmount;
+            userUpdates[slip.userId].balanceToAdd += isWinner ? winAmount : 0;
+            userUpdates[slip.userId].totalWagered += (slip.betAmount || 0);
             userUpdates[slip.userId].totalWon += winAmount;
             userUpdates[slip.userId].slips.push({
                 option: slip.selectedOption,
-                amount: slip.betAmount,
+                amount: slip.betAmount || 0,
                 winAmount: winAmount,
                 isWinner: isWinner
             });
@@ -628,34 +927,42 @@ async function settleEvent(eventId) {
         
         // Update user balances and send notifications
         for (const [userId, userData] of Object.entries(userUpdates)) {
-            const userDoc = await db.collection('users').doc(userId).get();
-            const user = userDoc.data();
-            
-            const newBalance = user.balance + userData.balanceChange;
-            const newDebt = newBalance < 0 ? Math.abs(newBalance) : 0;
-            const actualBalance = Math.max(0, newBalance); // This is the actual wallet balance
-            
-            // Update user balance
-            batch.update(userDoc.ref, {
-                balance: actualBalance,
-                debt: newDebt,
-                totalWinnings: (user.totalWinnings || 0) + Math.max(0, userData.balanceChange)
-            });
-            
-            // Create notification with CORRECT balance display
-            const netResult = userData.balanceChange;
-            const resultText = netResult > 0 ? `won ${formatCurrency(netResult)}` : `lost ${formatCurrency(Math.abs(netResult))}`;
-            
-            const notifRef = db.collection('notifications').doc();
-            batch.set(notifRef, {
-                userId: userId,
-                title: `Event Settled: ${eventData.title}`,
-                message: `You wagered ${formatCurrency(userData.totalWagered)} and ${resultText}. New balance: ${formatCurrency(actualBalance)}${newDebt > 0 ? ` (Debt: ${formatCurrency(newDebt)})` : ''}`,
-                timestamp: firebase.firestore.Timestamp.now(),
-                read: false,
-                type: 'settlement'
-            });
-}
+            if (userData.balanceToAdd > 0) {
+                // Winners get balance updates
+                const userDoc = await db.collection('users').doc(userId).get();
+                const user = userDoc.data();
+                
+                const newBalance = (user.balance || 0) + userData.balanceToAdd;
+                
+                batch.update(userDoc.ref, {
+                    balance: Math.floor(newBalance),
+                    totalWinnings: (user.totalWinnings || 0) + userData.balanceToAdd
+                });
+                
+                const walletBalance = newBalance - (user.debt || 0);
+                
+                const notifRef = db.collection('notifications').doc();
+                batch.set(notifRef, {
+                    userId: userId,
+                    title: `Event Settled: ${eventData.title}`,
+                    message: `Congratulations! You won ${formatCurrency(userData.balanceToAdd)} on ${winner}. Wallet balance: ${formatCurrency(walletBalance)}`,
+                    timestamp: firebase.firestore.Timestamp.now(),
+                    read: false,
+                    type: 'settlement'
+                });
+            } else {
+                // Losers get notification only
+                const notifRef = db.collection('notifications').doc();
+                batch.set(notifRef, {
+                    userId: userId,
+                    title: `Event Settled: ${eventData.title}`,
+                    message: `Your bet on ${userData.slips[0]?.option} didn't win. Better luck next time!`,
+                    timestamp: firebase.firestore.Timestamp.now(),
+                    read: false,
+                    type: 'settlement'
+                });
+            }
+        }
         
         // Update event status
         const eventRef = db.collection('events').doc(eventId);
@@ -667,10 +974,51 @@ async function settleEvent(eventId) {
             display_status: 'visible'
         });
         
+        // Calculate your vig (profit)
+        const myVig = totalPool - winnersWin;
+        const expectedVig = (totalPool * vigPercentage) / 100;
+        const isHealthy = myVig >= expectedVig;
+
+        // Create settlement record with vigStats
+        const settlementRef = db.collection('event_settlements').doc(eventId);
+        batch.set(settlementRef, {
+            eventId: eventId,
+            eventTitle: eventData.title || 'Unknown Event',
+            winner: winner,
+            winnersWin: winnersWin,
+            losersLose: losersLose,
+            totalPot: totalPool,
+            myVig: myVig,
+            vigPercentage: vigPercentage,
+            vigStats: {
+                isHealthy: isHealthy,
+                expectedVig: expectedVig,
+                actualVig: myVig,
+                profitLoss: myVig, // This should be actual vig only, not difference
+                healthStatus: isHealthy ? 'healthy' : 'unhealthy'
+            },
+            settledAt: firebase.firestore.Timestamp.now(),
+            totalBetsSettled: totalBetsSettled
+        });
+
+        // Store vig statistics for analytics
+        const vigStatsRef = db.collection('vig_analytics').doc();
+        batch.set(vigStatsRef, {
+            eventId: eventId,
+            eventTitle: eventData.title || 'Unknown Event',
+            settledDate: firebase.firestore.Timestamp.now(),
+            totalPot: totalPool,
+            expectedVig: expectedVig,
+            actualVig: myVig,
+            profitLoss: myVig, // This should be actual vig only
+            isHealthy: isHealthy,
+            vigPercentage: vigPercentage
+        });
+
         // Commit all changes
         await batch.commit();
-        
-        showNotification(`Event settled successfully! ${slipsSnapshot.size} bets processed.`);
+
+        showNotification(`Event settled successfully! ${totalBetsSettled} bets processed. Your profit: ${formatCurrency(myVig, 'INR')}`);
         loadEventsGrid();
         
     } catch (error) {
@@ -740,6 +1088,7 @@ async function displayArchivedEvents(archivedEvents) {
         
         card.innerHTML = `
             <h3>${event.title}</h3>
+            <p><strong>Sport:</strong> <span style="color: #ffa500; font-weight: bold;">${event.sportType || 'Not Set'}</span></p>
             <p><strong>Start:</strong> ${startTime}</p>
             <p><strong>Archived:</strong> ${archivedTime}</p>
             <p><strong>Status:</strong> <span class="event-status ${event.status}">${event.status.toUpperCase()}</span></p>
@@ -783,6 +1132,20 @@ async function permanentlyDeleteEvent(eventId) {
         loadArchivedEvents();
     } catch (error) {
         console.error('Error permanently deleting event:', error);
+    }
+}
+
+async function refreshEventOdds(eventId) {
+    try {
+        showNotification('Refreshing odds...');
+        
+        // Force refresh by reloading events grid
+        await loadEventsGrid();
+        
+        showNotification('Odds refreshed successfully');
+    } catch (error) {
+        console.error('Error refreshing odds:', error);
+        showNotification('Error refreshing odds');
     }
 }
 
@@ -1072,6 +1435,14 @@ function createAnalyticsTab() {
                 <div class="stat-value" id="conversion-rate">0%</div>
                 <div class="stat-label">KYC Conversion</div>
             </div>
+            <div class="stat-card" style="border-color: #9ef01a;">
+                <div class="stat-value" id="vig-profit-loss" style="font-size: 2rem;">₹0</div>
+                <div class="stat-label" id="vig-label">Vig Profit/Loss</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="algorithm-health">0%</div>
+                <div class="stat-label" id="health-label">Algorithm Health</div>
+            </div>
         </div>
         
         <div class="charts-container">
@@ -1083,6 +1454,24 @@ function createAnalyticsTab() {
                 <div class="chart-section">
                     <h3>Revenue Breakdown</h3>
                     <canvas id="revenueChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-row">
+                <div class="chart-section">
+                    <h3>Vig Performance by Event</h3>
+                    <canvas id="vigPerformanceChart" width="800" height="300"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-row">
+                <div class="chart-section">
+                    <h3>Algorithm Health Trends</h3>
+                    <canvas id="algorithmHealthChart" width="400" height="200"></canvas>
+                </div>
+                <div class="chart-section">
+                    <h3>Profit/Loss Breakdown</h3>
+                    <canvas id="profitLossChart" width="400" height="200"></canvas>
                 </div>
             </div>
             
@@ -1117,28 +1506,32 @@ async function loadAnalyticsData() {
         // Update labels based on period
         updatePeriodLabels(period);
         
-        // Load all analytics data
+        // Load all analytics data with better error handling
         const [
             signupsData,
             betsData, 
-            adsData,      // This now returns {views, clicks}
+            adsData,
             buyinsData,
             activityData,
-            usersData
+            usersData,
+            vigData
         ] = await Promise.all([
-            getSignupsData(startDate, endDate),
-            getBetsData(startDate, endDate),
-            getAdsData(startDate, endDate),    // Updated function
-            getBuyinsData(startDate, endDate),
-            getActivityData(startDate, endDate),
-            getUsersData()
+            getSignupsData(startDate, endDate).catch(e => { console.error('Signups error:', e); return 0; }),
+            getBetsData(startDate, endDate).catch(e => { console.error('Bets error:', e); return { count: 0, totalWagered: 0 }; }),
+            getAdsData(startDate, endDate).catch(e => { console.error('Ads error:', e); return { views: 0, clicks: 0 }; }),
+            getBuyinsData(startDate, endDate).catch(e => { console.error('Buyins error:', e); return { count: 0, totalAmount: 0 }; }),
+            getActivityData(startDate, endDate).catch(e => { console.error('Activity error:', e); return { activities: {}, dailyActivity: {}, total: 0 }; }),
+            getUsersData().catch(e => { console.error('Users error:', e); return { total: 0, approved: 0, pending: 0, debt: 0 }; }),
+            getVigData(startDate, endDate).catch(e => { console.error('Vig error:', e); return { totalProfitLoss: 0, healthyCount: 0, unhealthyCount: 0, events: [] }; })
         ]);
-        
+
         // Update stat cards
-        updateStatCards(signupsData, betsData, adsData, buyinsData, usersData);
-        
-        // Create/update charts
-        createCharts(period, activityData, buyinsData, betsData, adsData, usersData);
+        updateStatCards(signupsData, betsData, adsData, buyinsData, usersData, vigData);
+
+        // Create/update charts with delay to ensure DOM is ready
+        setTimeout(() => {
+            createCharts(period, activityData, buyinsData, betsData, adsData, usersData, vigData);
+        }, 100);
         
     } catch (error) {
         console.error('Error loading analytics:', error);
@@ -1171,6 +1564,18 @@ function getDateRange(period) {
         startDate: firebase.firestore.Timestamp.fromDate(startDate), 
         endDate: firebase.firestore.Timestamp.fromDate(endDate) 
     };
+}
+
+function generateDateRange(startDate, endDate) {
+    const dates = [];
+    const currentDate = new Date(startDate);
+    
+    while (currentDate <= endDate) {
+        dates.push(new Date(currentDate));
+        currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    return dates;
 }
 
 function updatePeriodLabels(period) {
@@ -1259,6 +1664,7 @@ async function getActivityData(startDate, endDate) {
         
     const activities = {};
     const dailyActivity = {};
+    const dailyActivitiesByDate = {};
     
     snapshot.docs.forEach(doc => {
         const data = doc.data();
@@ -1271,9 +1677,17 @@ async function getActivityData(startDate, endDate) {
         // Count by date
         if (!dailyActivity[date]) dailyActivity[date] = 0;
         dailyActivity[date]++;
+        
+        // Store detailed activities by date
+        if (!dailyActivitiesByDate[date]) dailyActivitiesByDate[date] = [];
+        dailyActivitiesByDate[date].push({
+            action: action,
+            timestamp: data.timestamp.toDate(),
+            data: data.data || {}
+        });
     });
     
-    return { activities, dailyActivity, total: snapshot.size };
+    return { activities, dailyActivity, dailyActivitiesByDate, total: snapshot.size };
 }
 
 async function getUsersData() {
@@ -1287,7 +1701,40 @@ async function getUsersData() {
     return { total: users.length, approved, pending, debt };
 }
 
-function updateStatCards(signups, bets, ads, buyins, usersData) {
+async function getVigData(startDate, endDate) {
+    const snapshot = await db.collection('vig_analytics')
+        .where('settledDate', '>=', startDate)
+        .where('settledDate', '<=', endDate)
+        .orderBy('settledDate', 'desc')
+        .get();
+    
+    let totalProfitLoss = 0;
+    let healthyCount = 0;
+    let unhealthyCount = 0;
+    const events = [];
+    
+    snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        totalProfitLoss += data.profitLoss;
+        
+        if (data.isHealthy) {
+            healthyCount++;
+        } else {
+            unhealthyCount++;
+        }
+        
+        events.push({
+            title: data.eventTitle,
+            profitLoss: data.profitLoss,
+            isHealthy: data.isHealthy,
+            date: data.settledDate.toDate()
+        });
+    });
+    
+    return { totalProfitLoss, healthyCount, unhealthyCount, events };
+}
+
+function updateStatCards(signups, bets, ads, buyins, usersData, vigData) {
     document.getElementById('period-signups').textContent = signups;
     document.getElementById('period-bets').textContent = bets.count;
     document.getElementById('period-ads-viewed').textContent = ads.views;
@@ -1298,22 +1745,37 @@ function updateStatCards(signups, bets, ads, buyins, usersData) {
     const conversionRate = usersData.total > 0 ? 
         ((usersData.approved / usersData.total) * 100).toFixed(1) : 0;
     document.getElementById('conversion-rate').textContent = conversionRate + '%';
+    
+    // Update vig stats
+    const vigElement = document.getElementById('vig-profit-loss');
+    const profitLoss = vigData.totalProfitLoss;
+    const profitLossText = profitLoss >= 0 ? `+${formatCurrency(profitLoss)}` : `-${formatCurrency(Math.abs(profitLoss))}`;
+    vigElement.textContent = profitLossText;
+    vigElement.style.color = profitLoss >= 0 ? '#9ef01a' : '#ff0a54';
+    
+    const totalEvents = vigData.healthyCount + vigData.unhealthyCount;
+    const healthPercentage = totalEvents > 0 ? ((vigData.healthyCount / totalEvents) * 100).toFixed(1) : 0;
+    const healthElement = document.getElementById('algorithm-health');
+    healthElement.textContent = healthPercentage + '%';
+    healthElement.style.color = healthPercentage >= 70 ? '#9ef01a' : healthPercentage >= 40 ? '#ffa500' : '#ff0a54';
 }
 
-function createCharts(period, activityData, buyinsData, betsData, adsData, usersData) {
+function createCharts(period, activityData, buyinsData, betsData, adsData, usersData, vigData) {
     // Destroy existing charts
     Object.values(analyticsCharts).forEach(chart => {
-        if (chart) chart.destroy();
+        if (chart && typeof chart.destroy === 'function') {
+            chart.destroy();
+        }
     });
     analyticsCharts = {};
     
     // Activity Overview Chart
-    const activityCtx = document.getElementById('activityChart')?.getContext('2d');
-    if (activityCtx) {
+    const activityCtx = document.getElementById('activityChart');
+    if (activityCtx && Object.keys(activityData.activities).length > 0) {
         analyticsCharts.activity = new Chart(activityCtx, {
             type: 'doughnut',
             data: {
-                labels: Object.keys(activityData.activities),
+                labels: Object.keys(activityData.activities).map(key => key.replace('_', ' ')),
                 datasets: [{
                     data: Object.values(activityData.activities),
                     backgroundColor: [
@@ -1324,6 +1786,7 @@ function createCharts(period, activityData, buyinsData, betsData, adsData, users
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
                     legend: { 
                         labels: { color: '#FFF3DA' }
@@ -1333,24 +1796,27 @@ function createCharts(period, activityData, buyinsData, betsData, adsData, users
         });
     }
     
-    // Revenue Chart - UPDATE this section
-    const revenueCtx = document.getElementById('revenueChart')?.getContext('2d');
+    // Revenue Chart
+    const revenueCtx = document.getElementById('revenueChart');
     if (revenueCtx) {
+        const totalAdRevenue = adsData.views * (settings.perAdReward || 50);
+        const totalVigRevenue = vigData.totalProfitLoss > 0 ? vigData.totalProfitLoss : 0; // Only count positive vig as revenue
+        
         analyticsCharts.revenue = new Chart(revenueCtx, {
             type: 'pie',
             data: {
-                labels: ['Buy-ins', 'Ad Revenue (Completed)', 'Betting Fees'],
+                labels: ['Vig Revenue', 'Ad Revenue'],
                 datasets: [{
                     data: [
-                        buyinsData.totalAmount,
-                        adsData.views * settings.perAdReward, // Only count completed views for revenue
-                        betsData.totalWagered * (settings.vigPercentage / 100)
+                        totalVigRevenue || 0,
+                        totalAdRevenue || 0
                     ],
-                    backgroundColor: ['#9ef01a', '#ffa500', '#ff0a54']
+                    backgroundColor: ['#9ef01a', '#ffa500']
                 }]
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
                     legend: { 
                         labels: { color: '#FFF3DA' }
@@ -1360,30 +1826,34 @@ function createCharts(period, activityData, buyinsData, betsData, adsData, users
         });
     }
     
-    // Engagement Trends - REPLACE the existing engagement chart code
-    const engagementCtx = document.getElementById('engagementChart')?.getContext('2d');
-    if (engagementCtx && Object.keys(activityData.dailyActivity).length > 0) {
-        const dates = Object.keys(activityData.dailyActivity).sort();
+    // Engagement Trends
+    const engagementCtx = document.getElementById('engagementChart');
+    if (engagementCtx) {
+        // Generate complete date range based on period
+        const { startDate, endDate } = getDateRange(period);
+        const dateRange = generateDateRange(startDate.toDate(), endDate.toDate());
         
-        // Fill in missing dates to ensure consecutive display
-        const startDate = new Date(dates[0]);
-        const endDate = new Date(dates[dates.length - 1]);
-        const allDates = [];
-        const allCounts = [];
-        
-        for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-            const dateString = d.toDateString();
-            allDates.push(d.toLocaleDateString());
-            allCounts.push(activityData.dailyActivity[dateString] || 0);
-        }
+        // Create chart data for all dates in range, filling missing dates with 0
+        const chartData = dateRange.map(date => {
+            const dateString = date.toDateString();
+            const count = activityData.dailyActivity[dateString] || 0;
+            const activities = activityData.dailyActivitiesByDate?.[dateString] || [];
+            
+            return {
+                x: date.toLocaleDateString(),
+                y: count,
+                fullDate: dateString,
+                activities: activities
+            };
+        });
         
         analyticsCharts.engagement = new Chart(engagementCtx, {
             type: 'line',
             data: {
-                labels: allDates,
+                labels: chartData.map(d => d.x),
                 datasets: [{
                     label: 'Daily Activity',
-                    data: allCounts,
+                    data: chartData.map(d => d.y),
                     borderColor: '#9ef01a',
                     backgroundColor: 'rgba(158, 240, 26, 0.1)',
                     tension: 0.4,
@@ -1392,6 +1862,14 @@ function createCharts(period, activityData, buyinsData, betsData, adsData, users
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
+                onClick: (event, activeElements) => {
+                    if (activeElements.length > 0) {
+                        const dataIndex = activeElements[0].index;
+                        const clickedData = chartData[dataIndex];
+                        showActivityDetailModal(clickedData.fullDate, clickedData.y, clickedData.activities);
+                    }
+                },
                 scales: {
                     y: { 
                         ticks: { color: '#FFF3DA' },
@@ -1413,8 +1891,8 @@ function createCharts(period, activityData, buyinsData, betsData, adsData, users
     }
     
     // User Activities Bar Chart
-    const userActivitiesCtx = document.getElementById('userActivitiesChart')?.getContext('2d');
-    if (userActivitiesCtx) {
+    const userActivitiesCtx = document.getElementById('userActivitiesChart');
+    if (userActivitiesCtx && Object.keys(activityData.activities).length > 0) {
         const topActivities = Object.entries(activityData.activities)
             .sort(([,a], [,b]) => b - a)
             .slice(0, 6);
@@ -1433,10 +1911,12 @@ function createCharts(period, activityData, buyinsData, betsData, adsData, users
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 scales: {
                     y: { 
                         ticks: { color: '#FFF3DA' },
-                        grid: { color: '#333' }
+                        grid: { color: '#333' },
+                        beginAtZero: true
                     },
                     x: { 
                         ticks: { color: '#FFF3DA' },
@@ -1453,19 +1933,20 @@ function createCharts(period, activityData, buyinsData, betsData, adsData, users
     }
     
     // Platform Health
-    const healthCtx = document.getElementById('healthChart')?.getContext('2d');
+    const healthCtx = document.getElementById('healthChart');
     if (healthCtx) {
         analyticsCharts.health = new Chart(healthCtx, {
             type: 'doughnut',
             data: {
                 labels: ['Approved KYC', 'Pending KYC', 'Users with Debt'],
                 datasets: [{
-                    data: [usersData.approved, usersData.pending, usersData.debt],
+                    data: [usersData.approved || 0, usersData.pending || 0, usersData.debt || 0],
                     backgroundColor: ['#9ef01a', '#ffa500', '#ff0a54']
                 }]
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 plugins: {
                     legend: { 
                         labels: { color: '#FFF3DA' }
@@ -1474,6 +1955,139 @@ function createCharts(period, activityData, buyinsData, betsData, adsData, users
             }
         });
     }
+}
+
+function showActivityDetailModal(date, totalCount, activities) {
+    // Create modal HTML
+    const modalHtml = `
+        <div id="activity-detail-modal" class="modal" style="display: block;">
+            <div class="modal-content">
+                <span class="close" onclick="closeActivityDetailModal()">&times;</span>
+                <h2>Activity Details for ${new Date(date).toLocaleDateString()}</h2>
+                <p><strong>Total Activities: ${totalCount}</strong></p>
+                <div class="logs-container" style="max-height: 400px;">
+                    ${activities.map(activity => `
+                        <div class="log-entry">
+                            <span class="log-timestamp">[${activity.timestamp.toLocaleTimeString()}]</span>
+                            <span>${formatLogAction(activity.action, activity.data)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Remove existing modal if any
+    const existingModal = document.getElementById('activity-detail-modal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    // Add to body
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+function closeActivityDetailModal() {
+    const modal = document.getElementById('activity-detail-modal');
+    if (modal) {
+        modal.remove();
+    }
+}
+
+// Vig Performance Chart
+const vigPerformanceCtx = document.getElementById('vigPerformanceChart');
+if (vigPerformanceCtx && vigData.events.length > 0) {
+    const chartData = vigData.events.map(event => ({
+        x: event.title.substring(0, 20) + '...',
+        y: event.profitLoss
+    }));
+    
+    analyticsCharts.vigPerformance = new Chart(vigPerformanceCtx, {
+        type: 'bar',
+        data: {
+            labels: chartData.map(d => d.x),
+            datasets: [{
+                label: 'Profit/Loss per Event',
+                data: chartData.map(d => d.y),
+                backgroundColor: chartData.map(d => d.y >= 0 ? '#9ef01a' : '#ff0a54'),
+                borderColor: chartData.map(d => d.y >= 0 ? '#7bc908' : '#cc0844'),
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { 
+                    ticks: { color: '#FFF3DA' },
+                    grid: { color: '#333' },
+                    beginAtZero: true
+                },
+                x: { 
+                    ticks: { color: '#FFF3DA' },
+                    grid: { color: '#333' }
+                }
+            },
+            plugins: {
+                legend: { 
+                    labels: { color: '#FFF3DA' }
+                }
+            }
+        }
+    });
+}
+
+// Algorithm Health Chart
+const algorithmHealthCtx = document.getElementById('algorithmHealthChart');
+if (algorithmHealthCtx) {
+    analyticsCharts.algorithmHealth = new Chart(algorithmHealthCtx, {
+        type: 'doughnut',
+        data: {
+            labels: ['Healthy Events', 'Unhealthy Events'],
+            datasets: [{
+                data: [vigData.healthyCount || 0, vigData.unhealthyCount || 0],
+                backgroundColor: ['#9ef01a', '#ff0a54']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { 
+                    labels: { color: '#FFF3DA' }
+                }
+            }
+        }
+    });
+}
+
+// Profit/Loss Breakdown Chart
+const profitLossCtx = document.getElementById('profitLossChart');
+if (profitLossCtx) {
+    const profitEvents = vigData.events.filter(e => e.profitLoss >= 0);
+    const lossEvents = vigData.events.filter(e => e.profitLoss < 0);
+    const totalProfit = profitEvents.reduce((sum, e) => sum + e.profitLoss, 0);
+    const totalLoss = Math.abs(lossEvents.reduce((sum, e) => sum + e.profitLoss, 0));
+    
+    analyticsCharts.profitLoss = new Chart(profitLossCtx, {
+        type: 'pie',
+        data: {
+            labels: ['Total Profit', 'Total Loss'],
+            datasets: [{
+                data: [totalProfit, totalLoss],
+                backgroundColor: ['#9ef01a', '#ff0a54']
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { 
+                    labels: { color: '#FFF3DA' }
+                }
+            }
+        }
+    });
 }
 
 function exportAnalytics() {
