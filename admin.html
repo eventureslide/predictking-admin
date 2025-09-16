@@ -272,12 +272,15 @@
 
         .modal-content {
             background: #1a1a1a;
-            margin: 5% auto;
+            margin: 2% auto;
             padding: 2rem;
             border-radius: 12px;
             width: 90%;
             max-width: 600px;
+            max-height: 90vh;
             border: 1px solid #333;
+            overflow-y: auto;
+            position: relative;
         }
 
         .close {
@@ -514,8 +517,41 @@
                         <input type="url" id="event-profile-pic" required>
                     </div>
                     <div class="form-group">
-                        <label for="event-background">Background Image URL</label>
-                        <input type="url" id="event-background">
+                        <label for="event-background1">Background Image 1 URL</label>
+                        <input type="url" id="event-background1">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="event-background2">Background Image 2 URL (Optional)</label>
+                        <input type="url" id="event-background2">
+                    </div>
+                    <div class="form-group">
+                        <label for="event-background3">Background Image 3 URL (Optional)</label>
+                        <input type="url" id="event-background3">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="event-background4">Background Image 4 URL (Optional)</label>
+                        <input type="url" id="event-background4">
+                    </div>
+                    <div class="form-group">
+                        <label for="event-status-color">Status Color</label>
+                        <input type="color" id="event-status-color" value="#9ef01a">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="event-team1-logo">Team 1 Logo URL</label>
+                        <input type="url" id="event-team1-logo">
+                    </div>
+                    <div class="form-group">
+                        <label for="event-team2-logo">Team 2 Logo URL</label>
+                        <input type="url" id="event-team2-logo">
                     </div>
                 </div>
                 
@@ -575,11 +611,44 @@
                         <input type="url" id="edit-event-profile-pic" required>
                     </div>
                     <div class="form-group">
-                        <label for="edit-event-background">Background Image URL</label>
-                        <input type="url" id="edit-event-background">
+                        <label for="edit-event-background1">Background Image 1 URL</label>
+                        <input type="url" id="edit-event-background1">
                     </div>
                 </div>
-                
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-event-background2">Background Image 2 URL (Optional)</label>
+                        <input type="url" id="edit-event-background2">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-event-background3">Background Image 3 URL (Optional)</label>
+                        <input type="url" id="edit-event-background3">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-event-background4">Background Image 4 URL (Optional)</label>
+                        <input type="url" id="edit-event-background4">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-event-status-color">Status Color</label>
+                        <input type="color" id="edit-event-status-color" value="#9ef01a">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-event-team1-logo">Team 1 Logo URL</label>
+                        <input type="url" id="edit-event-team1-logo">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-event-team2-logo">Team 2 Logo URL</label>
+                        <input type="url" id="edit-event-team2-logo">
+                    </div>
+                </div>
+                                
                 <div class="form-row">
                     <div class="form-group">
                         <label for="edit-event-start">Start Time</label>

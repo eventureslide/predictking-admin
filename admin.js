@@ -733,12 +733,18 @@ async function createEvent(e) {
         description: document.getElementById('event-description').value || '',
         sportType: document.getElementById('event-sport-type').value.trim(),
         profilePic: document.getElementById('event-profile-pic').value,
-        backgroundImage: document.getElementById('event-background').value || '',
+        backgroundImage1: document.getElementById('event-background1').value || '',
+        backgroundImage2: document.getElementById('event-background2').value || '',
+        backgroundImage3: document.getElementById('event-background3').value || '',
+        backgroundImage4: document.getElementById('event-background4').value || '',
+        team1Logo: document.getElementById('event-team1-logo').value || '',
+        team2Logo: document.getElementById('event-team2-logo').value || '',
+        statusColor: document.getElementById('event-status-color').value || '#9ef01a',
         startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
         options: options,
         initialOdds: initialOdds,
-        currentOdds: {...initialOdds}, // Copy initial odds as current odds
+        currentOdds: {...initialOdds},
         status: 'active',
         display_status: 'visible',
         archive_status: 'active',
@@ -790,7 +796,13 @@ function editEvent(eventId) {
     document.getElementById('edit-event-description').value = event.description || '';
     document.getElementById('edit-event-sport-type').value = event.sportType || '';
     document.getElementById('edit-event-profile-pic').value = event.profilePic || '';
-    document.getElementById('edit-event-background').value = event.backgroundImage || '';
+    document.getElementById('edit-event-background1').value = event.backgroundImage1 || event.backgroundImage || '';
+    document.getElementById('edit-event-background2').value = event.backgroundImage2 || '';
+    document.getElementById('edit-event-background3').value = event.backgroundImage3 || '';
+    document.getElementById('edit-event-background4').value = event.backgroundImage4 || '';
+    document.getElementById('edit-event-team1-logo').value = event.team1Logo || '';
+    document.getElementById('edit-event-team2-logo').value = event.team2Logo || '';
+    document.getElementById('edit-event-status-color').value = event.statusColor || '#9ef01a';
     document.getElementById('edit-event-vig').value = event.vigPercentage || 5;
     document.getElementById('edit-event-status').value = event.status || 'active';
     
@@ -820,11 +832,17 @@ async function updateEvent(e) {
         description: document.getElementById('edit-event-description').value || '',
         sportType: document.getElementById('edit-event-sport-type').value.trim(),
         profilePic: document.getElementById('edit-event-profile-pic').value,
-        backgroundImage: document.getElementById('edit-event-background').value || '',
+        backgroundImage1: document.getElementById('edit-event-background1').value || '',
+        backgroundImage2: document.getElementById('edit-event-background2').value || '',
+        backgroundImage3: document.getElementById('edit-event-background3').value || '',
+        backgroundImage4: document.getElementById('edit-event-background4').value || '',
+        team1Logo: document.getElementById('edit-event-team1-logo').value || '',
+        team2Logo: document.getElementById('edit-event-team2-logo').value || '',
+        statusColor: document.getElementById('edit-event-status-color').value || '#9ef01a',
         startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
         vigPercentage: parseInt(document.getElementById('edit-event-vig').value) || 5,
         status: document.getElementById('edit-event-status').value.toLowerCase().trim(),
-        updatedAt: firebase.firestore.Timestamp.now()
+        updatedData: firebase.firestore.Timestamp.now()
     };
     
     try {
