@@ -472,7 +472,7 @@ async function displayEventsGrid() {
             <h3>${event.title}</h3>
             <p><strong>Sport:</strong> <span style="color: #ffa500; font-weight: bold;">${event.sportType || 'Not Set'}</span></p>
             <p><strong>Start:</strong> ${startTime}</p>
-            <p><strong>Status:</strong> <span class="event-status ${event.status}">${event.status.toUpperCase()}</span></p>
+            <p><strong>Status:</strong> <span class="event-status" style="color: ${getStatusColor(event.status)}; font-weight: bold;">${event.status.toUpperCase()}</span></p>
             <p><strong>Display:</strong> <span class="event-status ${event.display_status || 'visible'}">${(event.display_status || 'visible').toUpperCase()}</span></p>
             <p><strong>Total Bets:</strong> ${event.totalBets || 0}</p>
             <p><strong>Total Pot:</strong> ₹${event.totalPot || 0}</p>
@@ -728,6 +728,11 @@ async function createEvent(e) {
         return;
     }
     
+    // Determine initial status based on start time
+    const startTime = new Date(startTimeInput);
+    const currentTime = new Date();
+    const initialStatus = startTime > currentTime ? 'upcoming' : 'active';
+    
     const eventData = {
         title: document.getElementById('event-title').value,
         description: document.getElementById('event-description').value || '',
@@ -740,12 +745,12 @@ async function createEvent(e) {
         team1Logo: document.getElementById('event-team1-logo').value || '',
         team2Logo: document.getElementById('event-team2-logo').value || '',
         statusColor: document.getElementById('event-status-color').value || '#9ef01a',
-        startTime: firebase.firestore.Timestamp.fromDate(new Date(startTimeInput)),
+        startTime: firebase.firestore.Timestamp.fromDate(startTime),
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
         options: options,
         initialOdds: initialOdds,
         currentOdds: {...initialOdds},
-        status: 'active',
+        status: initialStatus, // This will be 'upcoming' if start time is in future, 'active' if not
         display_status: 'visible',
         archive_status: 'active',
         totalBets: 0,
@@ -771,7 +776,7 @@ async function createEvent(e) {
         });
         
         closeModal('create-event-modal');
-        showNotification('Event created successfully with initial odds');
+        showNotification(`Event created successfully with status: ${initialStatus.toUpperCase()}`);
         loadEventsGrid();
         
         // Reset form
@@ -2205,6 +2210,28 @@ async function replyToComplaint(userId, complaintNumber) {
 function formatCurrency(amount, currency = 'INR') {
     const symbols = { INR: '₹', USD: '$', EUR: '€' };
     return `${symbols[currency] || '₹'}${amount}`;
+}
+
+function getStatusColor(status) {
+    if (!status) return '#9ef01a';
+    
+    const statusLower = status.toLowerCase().trim();
+    
+    switch(statusLower) {
+        case 'active':
+            return '#9ef01a';
+        case 'settled':
+            return '#2ec4b6';
+        case 'cancelled':
+            return '#ff0a54';
+        case 'delayed':
+            return '#3a86ff';
+        case 'upcoming':
+            return '#ffd400';
+        default:
+            // For other statuses, use the event's custom statusColor if set
+            return '#9ef01a';
+    }
 }
 
 function showNotification(message) {
