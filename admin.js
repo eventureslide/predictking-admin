@@ -426,70 +426,130 @@ function createEventsTab() {
     `;
 }
 
+// Enhanced loadEventsGrid function with better odds handling
+// Fixed loadEventsGrid function
 async function loadEventsGrid() {
     try {
-        // Force fresh data fetch
-        const eventsSnapshot = await db.collection('events').orderBy('startTime', 'desc').get();
-        // Get fresh event data each time
-        events = [];
+        console.log('Loading events grid...');
+        // Force fresh data fetch with proper isolation
+        const eventsSnapshot = await db.collection('events')
+            .orderBy('startTime', 'desc')
+            .get();
+        
+        events = []; // Clear existing array
+        
         for (const doc of eventsSnapshot.docs) {
-            const freshDoc = await db.collection('events').doc(doc.id).get();
-            events.push({ id: doc.id, ...freshDoc.data() });
+            try {
+                // Get fresh document data each time
+                const eventData = doc.data();
+                
+                // Create completely isolated event object using JSON deep clone
+                const isolatedEvent = {
+                    id: doc.id,
+                    ...JSON.parse(JSON.stringify(eventData))
+                };
+                
+                // Get current odds from betting pool for this specific event
+                try {
+                    const poolDoc = await db.collection('betting_pools').doc(doc.id).get();
+                    if (poolDoc.exists) {
+                        const poolData = poolDoc.data();
+                        if (poolData.currentOdds) {
+                            isolatedEvent.currentOdds = JSON.parse(JSON.stringify(poolData.currentOdds));
+                        }
+                    }
+                } catch (poolError) {
+                    console.log(`No betting pool found for event ${doc.id}`);
+                }
+                
+                events.push(isolatedEvent);
+            } catch (eventError) {
+                console.error(`Error processing event ${doc.id}:`, eventError);
+            }
         }
-        console.log('Loaded fresh events data:', events);
+        
+        console.log('Loaded events:', events.length);
         displayEventsGrid();
     } catch (error) {
         console.error('Error loading events:', error);
+        showNotification('Error loading events');
     }
 }
 
+// Fixed displayEventsGrid function
 async function displayEventsGrid() {
     const grid = document.getElementById('events-grid');
+    if (!grid) {
+        console.error('Events grid element not found');
+        return;
+    }
+    
     grid.innerHTML = '';
     
     // Filter out archived events
     const activeEvents = events.filter(e => e.archive_status !== 'archived');
+    console.log('Active events to display:', activeEvents.length);
+    
+    if (activeEvents.length === 0) {
+        grid.innerHTML = '<div style="text-align: center; grid-column: 1/-1;">No active events found.</div>';
+        return;
+    }
     
     for (const event of activeEvents) {
-        const card = document.createElement('div');
-        card.className = 'event-card';
-        
-        const startTime = event.startTime ? new Date(event.startTime.seconds * 1000).toLocaleString() : 'TBD';
-        
-        // Get vote counts for this event
-        const voteCounts = await getEventVoteCounts(event.id);
-        const voteCountsHtml = generateVoteCountsHtml(voteCounts);
-        
-        // Get settlement data if event is settled
-        const settlementData = await getEventSettlement(event.id);
-        const settlementHtml = generateSettlementHtml(settlementData);
-        
-        // Get current odds from betting pool
-        // Get both initial and current odds
-        const oddsHtml = await generateOddsHtml(event.id, event);
-        
-        card.innerHTML = `
-            <h3>${event.title}</h3>
-            <p><strong>Sport:</strong> <span style="color: #ffa500; font-weight: bold;">${event.sportType || 'Not Set'}</span></p>
-            <p><strong>Start:</strong> ${startTime}</p>
-            <p><strong>Status:</strong> <span class="event-status" style="color: ${getStatusColor(event.status)}; font-weight: bold;">${event.status.toUpperCase()}</span></p>
-            <p><strong>Display:</strong> <span class="event-status ${event.display_status || 'visible'}">${(event.display_status || 'visible').toUpperCase()}</span></p>
-            <p><strong>Total Bets:</strong> ${event.totalBets || 0}</p>
-            <p><strong>Total Pot:</strong> ₹${event.totalPot || 0}</p>
-            ${voteCountsHtml}
-            ${oddsHtml}
-            ${settlementHtml}
-            <div class="user-actions">
-                <button class="btn btn-secondary" onclick="editEvent('${event.id}')">EDIT</button>
-                <button class="btn btn-info" onclick="refreshEventOdds('${event.id}')">REFRESH ODDS</button>
-                ${event.status === 'active' ? `<button class="btn btn-warning" onclick="settleEvent('${event.id}')">SETTLE</button>` : ''}
-                ${event.display_status !== 'hidden' ? `<button class="btn btn-info" onclick="hideEvent('${event.id}')">HIDE</button>` : `<button class="btn btn-info" onclick="showEvent('${event.id}')">SHOW</button>`}
-                <button class="btn btn-secondary" onclick="archiveEvent('${event.id}')">ARCHIVE</button>
-                <button class="btn btn-danger" onclick="deleteEvent('${event.id}')">DELETE</button>
-            </div>
-        `;
-        
-        grid.appendChild(card);
+        try {
+            const card = document.createElement('div');
+            card.className = 'event-card';
+            
+            // Handle start time safely
+            let startTime = 'TBD';
+            if (event.startTime) {
+                try {
+                    if (event.startTime.seconds) {
+                        startTime = new Date(event.startTime.seconds * 1000).toLocaleString();
+                    } else if (event.startTime.toDate) {
+                        startTime = event.startTime.toDate().toLocaleString();
+                    }
+                } catch (timeError) {
+                    console.error('Error parsing start time for event', event.id, timeError);
+                }
+            }
+            
+            // Get vote counts for this event
+            const voteCounts = await getEventVoteCounts(event.id);
+            const voteCountsHtml = generateVoteCountsHtml(voteCounts);
+            
+            // Get settlement data if event is settled
+            const settlementData = await getEventSettlement(event.id);
+            const settlementHtml = generateSettlementHtml(settlementData);
+            
+            // Get odds HTML with proper isolation
+            const oddsHtml = await generateOddsHtml(event.id, event);
+            
+            card.innerHTML = `
+                <h3>${event.title || 'Untitled Event'}</h3>
+                <p><strong>Sport:</strong> <span style="color: #ffa500; font-weight: bold;">${event.sportType || 'Not Set'}</span></p>
+                <p><strong>Start:</strong> ${startTime}</p>
+                <p><strong>Status:</strong> <span class="event-status" style="color: ${getStatusColor(event.status)}; font-weight: bold;">${(event.status || 'unknown').toUpperCase()}</span></p>
+                <p><strong>Display:</strong> <span class="event-status ${event.display_status || 'visible'}">${(event.display_status || 'visible').toUpperCase()}</span></p>
+                <p><strong>Total Bets:</strong> ${event.totalBets || 0}</p>
+                <p><strong>Total Pot:</strong> ₹${event.totalPot || 0}</p>
+                ${voteCountsHtml}
+                ${oddsHtml}
+                ${settlementHtml}
+                <div class="user-actions">
+                    <button class="btn btn-secondary" onclick="editEvent('${event.id}')">EDIT</button>
+                    <button class="btn btn-info" onclick="refreshEventOdds('${event.id}')">REFRESH ODDS</button>
+                    ${event.status === 'active' ? `<button class="btn btn-warning" onclick="settleEvent('${event.id}')">SETTLE</button>` : ''}
+                    ${event.display_status !== 'hidden' ? `<button class="btn btn-info" onclick="hideEvent('${event.id}')">HIDE</button>` : `<button class="btn btn-info" onclick="showEvent('${event.id}')">SHOW</button>`}
+                    <button class="btn btn-secondary" onclick="archiveEvent('${event.id}')">ARCHIVE</button>
+                    <button class="btn btn-danger" onclick="deleteEvent('${event.id}')">DELETE</button>
+                </div>
+            `;
+            
+            grid.appendChild(card);
+        } catch (cardError) {
+            console.error('Error creating card for event', event.id, cardError);
+        }
     }
 }
 
@@ -587,13 +647,13 @@ function generateSettlementHtml(settlementData) {
 }
 
 // Generate HTML for displaying current odds
-// Generate HTML for displaying both initial and current odds
+// Fixed generateOddsHtml function with better isolation
 async function generateOddsHtml(eventId, event) {
     try {
-        const initialOdds = event.initialOdds || {};
-        let currentOdds = event.currentOdds || {};
+        // Always create new objects to prevent reference sharing
+        const initialOdds = event.initialOdds ? JSON.parse(JSON.stringify(event.initialOdds)) : {};
+        let currentOdds = event.currentOdds ? JSON.parse(JSON.stringify(event.currentOdds)) : {};
         
-        // Debug logging
         console.log(`Event ${eventId} - Initial Odds:`, initialOdds);
         console.log(`Event ${eventId} - Current Odds from event:`, currentOdds);
         
@@ -603,7 +663,7 @@ async function generateOddsHtml(eventId, event) {
             if (poolDoc.exists) {
                 const poolData = poolDoc.data();
                 if (poolData.currentOdds) {
-                    currentOdds = poolData.currentOdds;
+                    currentOdds = JSON.parse(JSON.stringify(poolData.currentOdds)); // Deep clone
                     console.log(`Event ${eventId} - Current Odds from betting pool:`, currentOdds);
                 }
             }
@@ -617,7 +677,7 @@ async function generateOddsHtml(eventId, event) {
             if (eventDoc.exists) {
                 const freshEventData = eventDoc.data();
                 if (freshEventData.currentOdds) {
-                    currentOdds = freshEventData.currentOdds;
+                    currentOdds = JSON.parse(JSON.stringify(freshEventData.currentOdds));
                     console.log(`Event ${eventId} - Fresh Current Odds from events collection:`, currentOdds);
                 }
             }
@@ -691,6 +751,8 @@ function generateOddsInputs() {
 }
 
 // Replace the entire createEvent function with:
+// Enhanced create event function with better odds isolation
+// Fixed createEvent function
 async function createEvent(e) {
     e.preventDefault();
     
@@ -707,12 +769,17 @@ async function createEvent(e) {
         return;
     }
     
-    // Collect initial odds for each option
+    // Collect initial odds for each option with proper isolation
     const initialOdds = {};
     let hasValidOdds = true;
     
     options.forEach((option, index) => {
         const oddsInput = document.getElementById(`odds-${index}`);
+        if (!oddsInput) {
+            hasValidOdds = false;
+            return;
+        }
+        
         const oddsValue = parseFloat(oddsInput.value);
         
         if (isNaN(oddsValue) || oddsValue < 1.01) {
@@ -720,6 +787,7 @@ async function createEvent(e) {
             return;
         }
         
+        // Create isolated odds entry
         initialOdds[option.trim()] = oddsValue;
     });
     
@@ -732,6 +800,10 @@ async function createEvent(e) {
     const startTime = new Date(startTimeInput);
     const currentTime = new Date();
     const initialStatus = startTime > currentTime ? 'upcoming' : 'active';
+    
+    // Create completely isolated odds objects
+    const initialOddsIsolated = JSON.parse(JSON.stringify(initialOdds));
+    const currentOddsIsolated = JSON.parse(JSON.stringify(initialOdds));
     
     const eventData = {
         title: document.getElementById('event-title').value,
@@ -747,21 +819,27 @@ async function createEvent(e) {
         statusColor: document.getElementById('event-status-color').value || '#9ef01a',
         startTime: firebase.firestore.Timestamp.fromDate(startTime),
         vigPercentage: parseInt(document.getElementById('event-vig').value) || 5,
-        options: options,
-        initialOdds: initialOdds,
-        currentOdds: {...initialOdds},
-        status: initialStatus, // This will be 'upcoming' if start time is in future, 'active' if not
+        options: [...options], // Create new array
+        initialOdds: initialOddsIsolated,
+        currentOdds: currentOddsIsolated,
+        status: initialStatus,
         display_status: 'visible',
         archive_status: 'active',
         totalBets: 0,
         totalPot: 0,
-        createdAt: firebase.firestore.Timestamp.now()
+        createdAt: firebase.firestore.Timestamp.now(),
+        uniqueEventId: `event_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` // Unique ID
     };
     
     try {
+        console.log('Creating event with data:', eventData);
         const eventRef = await db.collection('events').add(eventData);
+        console.log('Event created with ID:', eventRef.id);
         
-        // Initialize betting pool with initial odds
+        // Initialize betting pool with isolated odds
+        const poolInitialOdds = JSON.parse(JSON.stringify(initialOdds));
+        const poolCurrentOdds = JSON.parse(JSON.stringify(initialOdds));
+        
         await db.collection('betting_pools').doc(eventRef.id).set({
             eventId: eventRef.id,
             totalPool: 0,
@@ -770,23 +848,28 @@ async function createEvent(e) {
                 acc[option.trim()] = 0;
                 return acc;
             }, {}),
-            currentOdds: {...initialOdds},
-            initialOdds: {...initialOdds},
+            currentOdds: poolCurrentOdds,
+            initialOdds: poolInitialOdds,
             lastUpdated: firebase.firestore.Timestamp.now()
         });
         
+        console.log('Betting pool created for event:', eventRef.id);
+        
         closeModal('create-event-modal');
         showNotification(`Event created successfully with status: ${initialStatus.toUpperCase()}`);
-        loadEventsGrid();
+        
+        // Reload events
+        await loadEventsGrid();
         
         // Reset form
         document.getElementById('create-event-form').reset();
         document.getElementById('odds-container').style.display = 'none';
     } catch (error) {
         console.error('Error creating event:', error);
-        showNotification('Error creating event');
+        showNotification('Error creating event: ' + error.message);
     }
 }
+
 
 function editEvent(eventId) {
     const event = events.find(e => e.id === eventId);
@@ -1158,17 +1241,48 @@ async function permanentlyDeleteEvent(eventId) {
     }
 }
 
+// Fixed refresh function
 async function refreshEventOdds(eventId) {
     try {
         showNotification('Refreshing odds...');
         
-        // Force refresh by reloading events grid
+        // Get fresh data for this specific event
+        const eventDoc = await db.collection('events').doc(eventId).get();
+        if (!eventDoc.exists) {
+            throw new Error('Event not found');
+        }
+        
+        const eventData = eventDoc.data();
+        
+        // Get betting pool data separately
+        const poolDoc = await db.collection('betting_pools').doc(eventId).get();
+        let currentOdds = eventData.currentOdds || {};
+        
+        if (poolDoc.exists) {
+            const poolData = poolDoc.data();
+            if (poolData.currentOdds) {
+                currentOdds = poolData.currentOdds;
+            }
+        }
+        
+        // Update the specific event in our local events array
+        const eventIndex = events.findIndex(e => e.id === eventId);
+        if (eventIndex !== -1) {
+            // Create deep copies to prevent reference sharing
+            events[eventIndex] = {
+                ...events[eventIndex],
+                currentOdds: JSON.parse(JSON.stringify(currentOdds)),
+                initialOdds: JSON.parse(JSON.stringify(eventData.initialOdds || {}))
+            };
+        }
+        
+        // Refresh the entire events grid
         await loadEventsGrid();
         
         showNotification('Odds refreshed successfully');
     } catch (error) {
         console.error('Error refreshing odds:', error);
-        showNotification('Error refreshing odds');
+        showNotification('Error refreshing odds: ' + error.message);
     }
 }
 
@@ -2305,12 +2419,29 @@ function refreshUsers() {
     });
 }
 
+// Enhanced refresh functions
 function refreshEvents() {
-    loadEvents().then(() => {
-        if (document.getElementById('events-grid')) {
-            displayEventsGrid();
-        }
+    loadEventsGrid().then(() => {
         showNotification('Events refreshed');
+    }).catch(error => {
+        console.error('Error refreshing events:', error);
+        showNotification('Error refreshing events');
+    });
+}
+
+// Add debugging function to help troubleshoot
+function debugEvents() {
+    console.log('Current events array:', events);
+    console.log('Events count:', events.length);
+    
+    // Check Firebase connection
+    db.collection('events').limit(5).get().then(snapshot => {
+        console.log('Firebase events found:', snapshot.size);
+        snapshot.forEach(doc => {
+            console.log('Event ID:', doc.id, 'Data:', doc.data());
+        });
+    }).catch(error => {
+        console.error('Firebase connection error:', error);
     });
 }
 
@@ -2416,6 +2547,7 @@ async function resetDailyLimits() {
         console.error('Error resetting daily limits:', error);
     }
 }
+
 
 // Modal close on outside click
 window.onclick = function(event) {
