@@ -896,7 +896,20 @@ function editEvent(eventId) {
     
     // Convert timestamp to datetime-local format
     if (event.startTime) {
-        const date = event.startTime.toDate();
+        let date;
+        
+        // Handle different timestamp formats
+        if (event.startTime.toDate && typeof event.startTime.toDate === 'function') {
+            // Firestore Timestamp
+            date = event.startTime.toDate();
+        } else if (event.startTime.seconds) {
+            // Firestore Timestamp-like object with seconds property
+            date = new Date(event.startTime.seconds * 1000);
+        } else {
+            // Regular Date object or timestamp number
+            date = new Date(event.startTime);
+        }
+        
         const localDateTime = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
         document.getElementById('edit-event-start').value = localDateTime;
     }
