@@ -809,6 +809,8 @@ async function createEvent(e) {
         title: document.getElementById('event-title').value,
         description: document.getElementById('event-description').value || '',
         sportType: document.getElementById('event-sport-type').value.trim(),
+        leagueName: document.getElementById('event-league-name').value.trim(),
+        leaguePic: document.getElementById('event-league-pic').value.trim(),
         profilePic: document.getElementById('event-profile-pic').value,
         backgroundImage1: document.getElementById('event-background1').value || '',
         backgroundImage2: document.getElementById('event-background2').value || '',
@@ -883,6 +885,8 @@ function editEvent(eventId) {
     document.getElementById('edit-event-title').value = event.title || '';
     document.getElementById('edit-event-description').value = event.description || '';
     document.getElementById('edit-event-sport-type').value = event.sportType || '';
+    document.getElementById('edit-event-league-name').value = event.leagueName || '';
+    document.getElementById('edit-event-league-pic').value = event.leaguePic || '';
     document.getElementById('edit-event-profile-pic').value = event.profilePic || '';
     document.getElementById('edit-event-background1').value = event.backgroundImage1 || event.backgroundImage || '';
     document.getElementById('edit-event-background2').value = event.backgroundImage2 || '';
@@ -932,6 +936,8 @@ async function updateEvent(e) {
         title: document.getElementById('edit-event-title').value,
         description: document.getElementById('edit-event-description').value || '',
         sportType: document.getElementById('edit-event-sport-type').value.trim(),
+        leagueName: document.getElementById('edit-event-league-name').value.trim(),
+        leaguePic: document.getElementById('edit-event-league-pic').value.trim(),
         profilePic: document.getElementById('edit-event-profile-pic').value,
         backgroundImage1: document.getElementById('edit-event-background1').value || '',
         backgroundImage2: document.getElementById('edit-event-background2').value || '',
